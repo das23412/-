@@ -50,6 +50,22 @@ jobs:
       - name: 构建 APK
         run: flutter build apk --release
 
+      - name: 构建失败诊断
+        if: failure()
+        run: |
+          set +e
+          flutter build apk --release > build_diag.log 2>&1
+          {
+            echo "===== 关键错误行 ====="
+            grep -nE "error:|Error:|FAILURE:|Exception|What went wrong|Caused by|Unsupported|Could not|not found" build_diag.log | head -80
+            echo ""
+            echo "===== 失败区段 ====="
+            awk '/FAILURE: Build failed/{f=1} f{print; n++} n>=40{exit}' build_diag.log | head -45
+          } > diag.txt
+          cat diag.txt
+          MSG=$(grep -vE '^\s*$' diag.txt | tr '\n' '|' | tr -d '\r' | cut -c1-3800)
+          echo "::error::构建诊断：$MSG"
+
       - name: 上传 APK（Actions 产物）
         uses: actions/upload-artifact@v4
         with:
