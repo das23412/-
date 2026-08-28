@@ -38,7 +38,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
   }
 
   Future<void> _importFiles() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.custom,
       allowedExtensions: ['txt', 'epub', 'mobi', 'azw3', 'azw', 'fb2', 'html', 'htm'],

@@ -15,7 +15,7 @@ class FoldersPage extends StatefulWidget {
 
 class _FoldersPageState extends State<FoldersPage> {
   Future<void> _addFolder() async {
-    final dir = await FilePicker.getDirectoryPath(dialogTitle: '选择要扫描的文件夹');
+    final dir = await FilePicker.platform.getDirectoryPath(dialogTitle: '选择要扫描的文件夹');
     if (dir == null) return;
     final settings = AppSettings.instance;
     final list = settings.scanFolders;

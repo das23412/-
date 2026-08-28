@@ -67,7 +67,7 @@ class ReaderConfig extends ChangeNotifier {
 
   /// 选择并导入 .ttf/.otf 字体。返回 null 表示成功，否则为错误信息。
   Future<String?> pickCustomFont() async {
-    final picked = await FilePicker.pickFiles(
+    final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['ttf', 'otf'],
     );
@@ -98,7 +98,7 @@ class ReaderConfig extends ChangeNotifier {
 
   /// 选择自定义背景图。返回 null 表示成功。
   Future<String?> pickCustomBackground() async {
-    final picked = await FilePicker.pickFiles(
+    final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['jpg', 'jpeg', 'png', 'webp'],
     );

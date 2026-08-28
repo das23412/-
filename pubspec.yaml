@@ -24,7 +24,8 @@ dependencies:
   # 设置存储
   shared_preferences: ^2.3.4
   # 文件/文件夹选择（走系统 SAF，不需要存储权限）
-  file_picker: ">=8.1.7 <12.0.0"
+  # 注意：11.x 的安卓实现有编译问题（FilePickerPlugin 找不到符号），锁定稳定版 10.x
+  file_picker: ^10.0.0
   # EPUB 解压与 XML 解析
   archive: ^3.6.1
   xml: ^6.5.0
