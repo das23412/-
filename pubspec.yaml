@@ -2,7 +2,7 @@ name: moyue
 description: "墨阅 — 纯本地、无联网的中文小说阅读器（TXT/EPUB/MOBI/AZW3/FB2/HTML）"
 publish_to: 'none'
 
-version: 1.2.0+3
+version: 1.2.1+4
 
 environment:
   sdk: ^3.13.1

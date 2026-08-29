@@ -356,6 +356,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
         appBar: _appBar(context, lib, shown.length),
         body: Column(
           children: [
+            _freeNotice(),
             _tagBar(lib),
             if (lib.scanning || lib.scanHint.isNotEmpty) _scanBanner(lib),
             if (lib.scanRestricted && !lib.scanning) _permissionBanner(lib),
@@ -514,6 +515,29 @@ class _BookshelfPageState extends State<BookshelfPage> {
           ),
         );
       },
+    );
+  }
+
+  /// 顶部小说明：本应用免费，谨防付费购买。
+  Widget _freeNotice() {
+    return Container(
+      width: double.infinity,
+      color: Theme.of(context).colorScheme.primaryContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        children: [
+          Icon(Icons.verified_outlined,
+              size: 14, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '免费用，如果是购买的话，请立即退款。',
+              style: TextStyle(
+                  fontSize: 12, color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
