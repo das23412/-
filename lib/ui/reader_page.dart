@@ -156,6 +156,23 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _goChapter(int idx, {int? charOffset}) {
+    // 同章内按字符偏移跳转：直接翻到对应页，无需重载章节
+    if (idx == rs.currentChapter &&
+        charOffset != null &&
+        _layout != null &&
+        rs.chapters.isNotEmpty) {
+      final layout = _layout!;
+      final line = layout.lineIndexOfChar(charOffset);
+      final page = layout.pageOfLine(line);
+      if (context.read<ReaderConfig>().settings.pageMode == 3) {
+        _scrollController?.jumpTo((page * layout.linesPerPage * layout.lineHeight)
+            .clamp(0.0, double.infinity));
+      } else if (_pageController?.hasClients ?? false) {
+        _pageController!.jumpToPage(page);
+      }
+      rs.onPageChanged(idx, page, charOffset);
+      return;
+    }
     _pendingCharOffset = charOffset;
     _pendingJumpEnd = charOffset == null && _pendingJumpEnd;
     rs.goToChapter(idx, charOffset: charOffset ?? 0);
