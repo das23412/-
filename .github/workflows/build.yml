@@ -47,6 +47,11 @@ jobs:
           printf 'storeFile=moyue-key.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
             "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/key.properties
 
+      - name: 固定签名密钥（保证各版本可覆盖安装）
+        run: |
+          mkdir -p ~/.android
+          cp android/debug.keystore ~/.android/debug.keystore
+
       - name: 构建 APK
         run: flutter build apk --release
 

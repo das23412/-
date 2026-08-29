@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../core/book_format.dart';
 import '../core/text_utils.dart';
@@ -25,6 +26,12 @@ class LibraryState extends ChangeNotifier {
 
   /// 扫描发现、等待用户勾选确认的候选书籍。
   List<Book> pendingCandidates = [];
+
+  /// 「所有文件访问」未授权时为 true：扫描结果不完整。
+  bool scanRestricted = false;
+
+  /// 最近一次扫描的报告（供界面展示）。
+  String scanReport = '';
 
   // 界面状态
   SortMode sortMode = SortMode.lastRead;
@@ -71,20 +78,28 @@ class LibraryState extends ChangeNotifier {
     if (scanning) return;
     scanning = true;
     scanHint = fullScan ? '正在全盘扫描…' : '正在扫描…';
+    scanRestricted = false;
     notifyListeners();
 
     try {
       books = await _db.allBooks();
+      // 权限预检：未授权时安卓会返回空目录列表，扫描注定不完整
+      final manageGranted = await Permission.manageExternalStorage.isGranted;
+      scanRestricted = !manageGranted;
+
       final roots = <String>[];
-      if (fullScan) roots.add(ScanService.primaryRoot);
+      if (fullScan) {
+        roots.addAll(ScanService.defaultRoots()); // 内置存储 + SD 卡 + U 盘
+      }
       roots.addAll(settings.scanFolders);
-      final existingRoots = roots.where((r) => Directory(r).existsSync()).toList();
-      final found = await compute(ScanService.scan, existingRoots);
+      final existingRoots =
+          roots.where((r) => Directory(r).existsSync()).toList();
+      final report = await compute(ScanService.scan, existingRoots);
 
       final existing = books.map((b) => b.path).toSet();
       final ignored = settings.ignoredScanPaths.toSet();
       final candidates = <Book>[];
-      for (final f in found) {
+      for (final f in report.found) {
         if (existing.contains(f.path) || ignored.contains(f.path)) continue;
         candidates.add(Book(
           path: f.path,
@@ -95,9 +110,19 @@ class LibraryState extends ChangeNotifier {
         ));
       }
       pendingCandidates = candidates;
-      scanHint = candidates.isEmpty
-          ? '没有发现新的书籍'
-          : '发现 ${candidates.length} 本候选书籍，请在清单中勾选导入';
+      scanReport =
+          '存储区 ${report.roots.length} 个 · 进入目录 ${report.dirsWalked} 个 · '
+          '跳过 ${report.skippedDirs} 个 · 无法读取 ${report.unreadableDirs} 个 · '
+          '候选 ${candidates.length} 本';
+      if (scanRestricted) {
+        scanHint = '未授予「所有文件访问」权限，扫描结果不完整';
+      } else if (candidates.isEmpty) {
+        scanHint = report.found.isEmpty
+            ? '没有发现新的书籍（详见扫描报告）'
+            : '发现的书籍都已在书架或忽略列表中';
+      } else {
+        scanHint = '发现 ${candidates.length} 本候选书籍，请在清单中勾选导入';
+      }
       settings.firstScanDone = true;
       notifyListeners();
     } catch (e) {

@@ -91,6 +91,17 @@ class _FoldersPageState extends State<FoldersPage> {
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
+            onPressed: widget.library.scanning
+                ? null
+                : () async {
+                    await widget.library.scan(fullScan: true);
+                    if (context.mounted) Navigator.pop(context);
+                  },
+            icon: const Icon(Icons.travel_explore),
+            label: const Text('全盘重新扫描（含 SD 卡/U 盘）'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
             onPressed: () async {
               final n = await widget.library.resetIgnoredPaths();
               if (context.mounted) {

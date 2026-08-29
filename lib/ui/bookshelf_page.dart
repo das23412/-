@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../core/book_format.dart';
@@ -97,10 +98,23 @@ class _BookshelfPageState extends State<BookshelfPage> {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      '勾选你要导入的文件；不需要的取消勾选即可，不会进入书架',
+                      lib.scanReport,
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11.5,
                           color: Theme.of(sheetCtx).hintColor),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '提示：微信/QQ 接收的文件在系统私有目录（Android/data），任何应用都无法扫描；'
+                      'QQ浏览器默认下载目录 Download/QQBrowser 可正常扫描，「私密下载」除外。',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.orange.shade800),
                     ),
                   ),
                 ),
@@ -293,11 +307,12 @@ class _BookshelfPageState extends State<BookshelfPage> {
           children: [
             _tagBar(lib),
             if (lib.scanning || lib.scanHint.isNotEmpty) _scanBanner(lib),
+            if (lib.scanRestricted && !lib.scanning) _permissionBanner(lib),
             Expanded(
               child: shown.isEmpty
                   ? _empty(context, lib)
                   : RefreshIndicator(
-                      onRefresh: () => lib.scan(fullScan: false),
+                      onRefresh: () => lib.scan(fullScan: true),
                       child: GridView.builder(
                         padding: const EdgeInsets.fromLTRB(12, 8, 12, 88),
                         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -451,6 +466,45 @@ class _BookshelfPageState extends State<BookshelfPage> {
     );
   }
 
+  /// 权限受限横幅：提醒扫描不完整并提供一键授权。
+  Widget _permissionBanner(LibraryState lib) {
+    return Container(
+      width: double.infinity,
+      color: Colors.orange.shade700,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              size: 18, color: Colors.white),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text('未授予「所有文件访问」权限，扫描结果不完整',
+                style: TextStyle(fontSize: 12.5, color: Colors.white)),
+          ),
+          GestureDetector(
+            onTap: () async {
+              await Permission.manageExternalStorage.request();
+              await lib.scan(fullScan: true);
+            },
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text('去授权',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.orange.shade800,
+                      fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _scanBanner(LibraryState lib) {
     return Container(
       width: double.infinity,
@@ -469,9 +523,51 @@ class _BookshelfPageState extends State<BookshelfPage> {
           ),
           if (!lib.scanning)
             GestureDetector(
-              onTap: () => lib.scanHint = '',
-              child: const Icon(Icons.close, size: 16),
+              onTap: _showScanReportDialog,
+              child: const Icon(Icons.info_outline, size: 16),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// 扫描报告详情 + 常见“扫不到”的原因说明。
+  void _showScanReportDialog() {
+    final lib = context.read<LibraryState>();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('扫描报告'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(lib.scanReport.isEmpty ? '还没有扫描记录' : lib.scanReport),
+            const SizedBox(height: 12),
+            if (lib.scanRestricted)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text('⚠ 未授予「所有文件访问」权限，本次扫描不完整。',
+                    style: TextStyle(color: Colors.orange)),
+              ),
+            const Text('扫不到的常见原因：',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            const Text(
+              '· 微信/QQ 接收的文件在系统私有目录（Android/data），任何应用都无法扫描，'
+              '请先在文件管理器移动到 Download 等公共目录\n'
+              '· QQ浏览器的「私密下载/无痕下载」在其私有目录里，普通下载在 Download/QQBrowser 可扫描\n'
+              '· 以 . 开头的隐藏文件夹不会扫描\n'
+              '· 忽略列表里的文件不再提示（扫描文件夹页可重置）',
+              style: TextStyle(fontSize: 13, height: 1.5),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
         ],
       ),
     );
