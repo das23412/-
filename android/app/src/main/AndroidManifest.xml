@@ -1,11 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!--
-      权限最小化说明：
-      - 本应用不申请 INTERNET 权限，发布版 APK 完全无法联网；
+      权限说明：
+      - INTERNET：仅用于「从链接导入」功能，且受设置页「允许联网下载」总开关约束——
+        开关默认关闭，关闭时应用零联网行为；墨阅不内置任何书源站点，绝不上传数据。
       - MANAGE_EXTERNAL_STORAGE（“所有文件访问”）：仅用于全盘扫描本机小说文件，
         安卓 11+ 需要，用户可在系统设置中拒绝；
       - READ_EXTERNAL_STORAGE：仅安卓 12 及以下的老系统扫描存储需要。
     -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -15,7 +17,8 @@
         android:label="墨阅"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true">
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -238,6 +238,27 @@ class LibraryState extends ChangeNotifier {
     await importFiles([path]);
   }
 
+  /// 应用私有导入目录（也是链接下载的目标目录）。
+  Future<Directory> importDirectory() => _importDir();
+
+  /// 把已下载到应用目录的文件登记进书架（链接导入用）。
+  Future<Book> registerDownloadedFile(String path) async {
+    final file = File(path);
+    final stat = file.statSync();
+    final name = p.basename(path);
+    final book = Book(
+      path: path,
+      title: TextUtils.cleanTitle(p.basenameWithoutExtension(name)),
+      format: BookFormat.fromPath(name),
+      sizeBytes: stat.size,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+      imported: true,
+    );
+    await _db.insertBook(book);
+    await reload();
+    return book;
+  }
+
   Future<Directory> _importDir() async {
     final doc = await getApplicationDocumentsDirectory();
     final dir = Directory(p.join(doc.path, 'books'));

@@ -67,4 +67,11 @@ class AppSettings {
       _prefs.getStringList(_kIgnoredScanPaths) ?? [];
   Future<void> setIgnoredScanPaths(List<String> v) =>
       _prefs.setStringList(_kIgnoredScanPaths, v);
+
+  /// 「允许联网下载」总开关，默认关闭。
+  /// 开关关闭时应用不发起任何网络请求；打开后也只在用户主动下载时联网。
+  static const _kAllowNetworkDownload = 'allow_network_download';
+  bool get allowNetworkDownload =>
+      _prefs.getBool(_kAllowNetworkDownload) ?? false;
+  set allowNetworkDownload(bool v) => _prefs.setBool(_kAllowNetworkDownload, v);
 }

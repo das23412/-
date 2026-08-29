@@ -9,6 +9,7 @@ import '../state/library_state.dart';
 import 'book_detail_sheet.dart';
 import 'common.dart';
 import 'folders_page.dart';
+import 'link_import_page.dart';
 import 'reader_page.dart';
 
 /// 书架主页。
@@ -244,6 +245,16 @@ class _BookshelfPageState extends State<BookshelfPage> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.download_outlined),
+              title: const Text('从链接导入'),
+              subtitle: const Text('粘贴文件直链下载入书架（需开启联网开关）'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const LinkImportPage()));
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.manage_search),
               title: const Text('全盘扫描手机里的小说'),
               onTap: () {
@@ -273,8 +284,48 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 }
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('关于墨阅与隐私说明'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showAbout();
+              },
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showAbout() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('关于墨阅'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('墨阅 · 纯本地小说阅读器（v1.2.0）',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 10),
+            Text(
+              '· 书籍文件、阅读进度、书签全部保存在本机\n'
+              '· 不提供任何内容资源，没有内置书源或站点\n'
+              '· 联网仅用于「从链接导入」：默认关闭，打开后也只在你主动下载时访问你粘贴的链接\n'
+              '· 绝无后台请求，绝不上传任何数据\n'
+              '· 分享链接由用户自行获取，请支持正版',
+              style: TextStyle(fontSize: 13.5, height: 1.6),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
       ),
     );
   }
