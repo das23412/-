@@ -89,6 +89,21 @@ class _FoldersPageState extends State<FoldersPage> {
             icon: const Icon(Icons.manage_search),
             label: const Text('立即扫描这些文件夹'),
           ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () async {
+              final n = await widget.library.resetIgnoredPaths();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(n == 0 ? '没有忽略中的文件' : '已重置 $n 个被忽略的文件，下次扫描会重新提示')));
+              }
+              setState(() {});
+            },
+            icon: const Icon(Icons.restart_alt),
+            label: Text(widget.library.ignoredCount > 0
+                ? '重置忽略列表（${widget.library.ignoredCount} 个文件）'
+                : '重置忽略列表'),
+          ),
         ],
       ),
     );

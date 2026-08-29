@@ -60,4 +60,11 @@ class AppSettings {
   static const _kFirstScanDone = 'first_scan_done';
   bool get firstScanDone => _prefs.getBool(_kFirstScanDone) ?? false;
   set firstScanDone(bool v) => _prefs.setBool(_kFirstScanDone, v);
+
+  /// 扫描时被用户永久忽略的文件路径。
+  static const _kIgnoredScanPaths = 'ignored_scan_paths';
+  List<String> get ignoredScanPaths =>
+      _prefs.getStringList(_kIgnoredScanPaths) ?? [];
+  Future<void> setIgnoredScanPaths(List<String> v) =>
+      _prefs.setStringList(_kIgnoredScanPaths, v);
 }

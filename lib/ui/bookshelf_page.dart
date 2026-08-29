@@ -20,13 +20,171 @@ class BookshelfPage extends StatefulWidget {
 
 class _BookshelfPageState extends State<BookshelfPage> {
   bool _searching = false;
+  bool _candidateSheetOpen = false;
   final _searchController = TextEditingController();
+  LibraryState? _observedLib;
 
   @override
   void initState() {
     super.initState();
     final lib = context.read<LibraryState>();
     lib.reload();
+    _observedLib = lib;
+    lib.addListener(_onLibChanged);
+  }
+
+  @override
+  void dispose() {
+    _observedLib?.removeListener(_onLibChanged);
+    super.dispose();
+  }
+
+  void _onLibChanged() {
+    if (!mounted) return;
+    final lib = _observedLib!;
+    if (lib.pendingCandidates.isNotEmpty && !_candidateSheetOpen) {
+      _candidateSheetOpen = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showCandidateSheet();
+      });
+    }
+    setState(() {});
+  }
+
+  /// 候选导入清单：先勾选，再入库。
+  void _showCandidateSheet() {
+    final lib = _observedLib!;
+    final candidates = List<Book>.from(lib.pendingCandidates);
+    final selected = candidates.map((b) => b.path).toSet();
+    bool rememberUnselected = true;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheet) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(sheetCtx).size.height * 0.72,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Text('发现 ${candidates.length} 本候选书籍',
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => setSheet(() {
+                          if (selected.length == candidates.length) {
+                            selected.clear();
+                          } else {
+                            selected
+                              ..clear()
+                              ..addAll(candidates.map((b) => b.path));
+                          }
+                        }),
+                        child: Text(selected.length == candidates.length
+                            ? '全不选'
+                            : '全选'),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '勾选你要导入的文件；不需要的取消勾选即可，不会进入书架',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(sheetCtx).hintColor),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: candidates.length,
+                    itemBuilder: (ctx, i) {
+                      final b = candidates[i];
+                      return CheckboxListTile(
+                        value: selected.contains(b.path),
+                        onChanged: (v) => setSheet(() {
+                          v == true
+                              ? selected.add(b.path)
+                              : selected.remove(b.path);
+                        }),
+                        title: Text(b.title,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(
+                          '${b.format.displayName} · ${formatBytes(b.sizeBytes)}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        secondary: Text(
+                          b.format.displayName,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(sheetCtx).colorScheme.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                CheckboxListTile(
+                  value: rememberUnselected,
+                  onChanged: (v) => setSheet(() => rememberUnselected = v == true),
+                  title: const Text('记住未勾选的文件，以后扫描不再提示',
+                      style: TextStyle(fontSize: 13)),
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            lib.ignoreAllCandidates();
+                            Navigator.pop(sheetCtx);
+                          },
+                          child: const Text('全部忽略'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          onPressed: selected.isEmpty
+                              ? null
+                              : () async {
+                                  final n = await lib.confirmCandidates(
+                                    selected,
+                                    rememberUnselected: rememberUnselected,
+                                  );
+                                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                                  if (mounted && n > 0) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('已导入 $n 本书')));
+                                  }
+                                },
+                          icon: const Icon(Icons.check),
+                          label: Text('导入所选（${selected.length}）'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ).whenComplete(() => _candidateSheetOpen = false);
   }
 
   Future<void> _openBook(Book book) async {

@@ -23,6 +23,9 @@ class LibraryState extends ChangeNotifier {
   bool scanning = false;
   String scanHint = '';
 
+  /// 扫描发现、等待用户勾选确认的候选书籍。
+  List<Book> pendingCandidates = [];
+
   // 界面状态
   SortMode sortMode = SortMode.lastRead;
   String searchQuery = '';
@@ -63,7 +66,7 @@ class LibraryState extends ChangeNotifier {
 
   // ---------- 扫描 ----------
 
-  /// 全盘 + 用户文件夹扫描。首启调用，之后手动触发。
+  /// 全盘 + 用户文件夹扫描。结果不直接入库，而是生成候选清单交给用户勾选。
   Future<void> scan({bool fullScan = true}) async {
     if (scanning) return;
     scanning = true;
@@ -71,14 +74,19 @@ class LibraryState extends ChangeNotifier {
     notifyListeners();
 
     try {
+      books = await _db.allBooks();
       final roots = <String>[];
       if (fullScan) roots.add(ScanService.primaryRoot);
       roots.addAll(settings.scanFolders);
       final existingRoots = roots.where((r) => Directory(r).existsSync()).toList();
       final found = await compute(ScanService.scan, existingRoots);
-      final newBooks = <Book>[];
+
+      final existing = books.map((b) => b.path).toSet();
+      final ignored = settings.ignoredScanPaths.toSet();
+      final candidates = <Book>[];
       for (final f in found) {
-        newBooks.add(Book(
+        if (existing.contains(f.path) || ignored.contains(f.path)) continue;
+        candidates.add(Book(
           path: f.path,
           title: f.title,
           format: f.format,
@@ -86,17 +94,72 @@ class LibraryState extends ChangeNotifier {
           addedAt: DateTime.now().millisecondsSinceEpoch,
         ));
       }
-      final inserted = await _db.scanInsert(newBooks);
-      scanHint = inserted.isEmpty ? '没有发现新的书籍' : '新发现 ${inserted.length} 本：${inserted.take(3).join('、')}${inserted.length > 3 ? ' 等' : ''}';
+      pendingCandidates = candidates;
+      scanHint = candidates.isEmpty
+          ? '没有发现新的书籍'
+          : '发现 ${candidates.length} 本候选书籍，请在清单中勾选导入';
       settings.firstScanDone = true;
-      await reload();
+      notifyListeners();
     } catch (e) {
       scanHint = '扫描失败：$e';
+      notifyListeners();
     } finally {
       scanning = false;
       notifyListeners();
     }
   }
+
+  /// 确认导入勾选的候选书籍；未勾选的可选择记住（以后扫描不再提示）。
+  Future<int> confirmCandidates(
+    Set<String> paths, {
+    bool rememberUnselected = true,
+  }) async {
+    var n = 0;
+    for (final b in pendingCandidates) {
+      if (paths.contains(b.path)) {
+        final id = await _db.insertBook(b);
+        if (id > 0) n++;
+      } else if (rememberUnselected) {
+        await _ignorePaths([b.path]);
+      }
+    }
+    pendingCandidates = [];
+    await reload();
+    scanHint = n > 0 ? '已导入 $n 本书' : '';
+    notifyListeners();
+    return n;
+  }
+
+  /// 全部忽略这批候选（记住，以后不再提示）。
+  Future<void> ignoreAllCandidates() async {
+    await _ignorePaths(pendingCandidates.map((b) => b.path).toList());
+    pendingCandidates = [];
+    scanHint = '已忽略本批候选文件';
+    notifyListeners();
+  }
+
+  /// 暂不处理（不记住，下次扫描还会提示）。
+  void discardCandidates() {
+    pendingCandidates = [];
+    scanHint = '';
+    notifyListeners();
+  }
+
+  Future<void> _ignorePaths(List<String> paths) async {
+    final list = settings.ignoredScanPaths;
+    for (final p in paths) {
+      if (!list.contains(p)) list.add(p);
+    }
+    await settings.setIgnoredScanPaths(list);
+  }
+
+  Future<int> resetIgnoredPaths() async {
+    final n = settings.ignoredScanPaths.length;
+    await settings.setIgnoredScanPaths([]);
+    return n;
+  }
+
+  int get ignoredCount => settings.ignoredScanPaths.length;
 
   /// 清理已失效的引用（原文件被删除的书）。
   Future<int> cleanMissing() async {

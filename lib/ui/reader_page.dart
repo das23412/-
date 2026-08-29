@@ -31,6 +31,8 @@ class _ReaderPageState extends State<ReaderPage> {
   bool _pendingJumpEnd = false;
   int? _pendingCharOffset;
   double? _sliderPreview;
+  String _sliderChapterLabel = '';
+  bool _dragForward = true; // 仿真翻页的方向感知
 
   @override
   void initState() {
@@ -69,7 +71,11 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _toggleMenu() {
-    setState(() => _menuVisible = !_menuVisible);
+    setState(() {
+      _menuVisible = !_menuVisible;
+      _sliderChapterLabel = '';
+      _sliderPreview = null;
+    });
     SystemChrome.setEnabledSystemUIMode(
       _menuVisible ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky,
     );
@@ -102,7 +108,7 @@ class _ReaderPageState extends State<ReaderPage> {
     final cur = pc.page?.round() ?? 0;
     if (cur < layout.pageCount - 1) {
       pc.animateToPage(cur + 1,
-          duration: const Duration(milliseconds: 240), curve: Curves.easeOut);
+          duration: const Duration(milliseconds: 260), curve: Curves.easeOut);
     } else if (rs.currentChapter < rs.chapters.length - 1) {
       _goChapter(rs.currentChapter + 1);
     } else {
@@ -124,7 +130,7 @@ class _ReaderPageState extends State<ReaderPage> {
     final cur = pc.page?.round() ?? 0;
     if (cur > 0) {
       pc.animateToPage(cur - 1,
-          duration: const Duration(milliseconds: 240), curve: Curves.easeOut);
+          duration: const Duration(milliseconds: 260), curve: Curves.easeOut);
     } else if (rs.currentChapter > 0) {
       _pendingJumpEnd = true;
       _goChapter(rs.currentChapter - 1);
@@ -308,25 +314,158 @@ class _ReaderPageState extends State<ReaderPage> {
     return const SizedBox.shrink();
   }
 
+  // ---------- 翻页模式（仿真 / 平移 / 覆盖） ----------
+
   Widget _pageBody(ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
     final style = _style(cfg, palette);
+    final mode = cfg.settings.pageMode; // 0 仿真 / 1 平移 / 2 覆盖
     _pageController ??= PageController();
-    return PageView.builder(
-      controller: _pageController,
-      itemCount: layout.pageCount,
-      onPageChanged: (page) {
-        final charOffset = layout.charOffsetOfLine(page * layout.linesPerPage);
-        rs.onPageChanged(rs.currentChapter, page, charOffset);
+    final pc = _pageController!;
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n is ScrollUpdateNotification && n.scrollDelta != null) {
+          if (n.scrollDelta! < 0) {
+            _dragForward = true;
+          } else if (n.scrollDelta! > 0) {
+            _dragForward = false;
+          }
+        }
+        return false;
       },
-      itemBuilder: (ctx, page) => SizedBox(
-        width: double.infinity,
-        child: Text(
-          layout.pageText(page),
-          style: style,
-        ),
+      child: PageView.builder(
+        controller: pc,
+        itemCount: layout.pageCount,
+        onPageChanged: (page) {
+          final charOffset =
+              layout.charOffsetOfLine(page * layout.linesPerPage);
+          rs.onPageChanged(rs.currentChapter, page, charOffset);
+        },
+        itemBuilder: (ctx, page) {
+          final content = SizedBox.expand(
+            child: Text(layout.pageText(page), style: style),
+          );
+          if (mode == 1) return content;
+          return AnimatedBuilder(
+            animation: pc,
+            builder: (ctx, _) {
+              double value = page.toDouble();
+              if (pc.hasClients && pc.position.haveDimensions && pc.page != null) {
+                value = pc.page!;
+              }
+              final d = value - page; // >0 当前页(在锚点左侧)，<0 即将盖入的页
+              if (d.abs() < 0.001) return content;
+              return mode == 2
+                  ? _coverPage(content, d)
+                  : _curlPage(content, d);
+            },
+          );
+        },
       ),
     );
   }
+
+  /// 覆盖模式：即将显示的页保持静止从右侧“盖”到当前页上，当前页钉住并逐渐变暗。
+  Widget _coverPage(Widget content, double d) {
+    return LayoutBuilder(builder: (ctx, box) {
+      final w = box.maxWidth;
+      if (d > 0) {
+        // 当前页：钉住 + 按进度压暗
+        return Transform.translate(
+          offset: Offset(d * w, 0),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              content,
+              Container(color: Colors.black.withValues(alpha: (d * 0.45).clamp(0.0, 0.45))),
+            ],
+          ),
+        );
+      }
+      // 盖入页：正常滑动（位于上层），左缘加落影增强“盖上去”的感觉
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          content,
+          Positioned(
+            left: 0, top: 0, bottom: 0, width: 16,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.black.withValues(alpha: 0.28),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    });
+  }
+
+  /// 仿真模式：两页都钉住，用“卷页揭示”取代平移——
+  /// 前翻时新页以弧形折痕从右缘逐渐展开；后翻时当前页自然右移、左缘带折痕阴影。
+  Widget _curlPage(Widget content, double d) {
+    return LayoutBuilder(builder: (ctx, box) {
+      final w = box.maxWidth;
+      final h = box.maxHeight;
+      if (d > 0) {
+        // 底下的页：钉住，折痕处画投影
+        final edgeX = _dragForward ? w * (1 - d) : w * d;
+        return Transform.translate(
+          offset: Offset(d * w, 0),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              content,
+              if (d < 0.999)
+                CustomPaint(
+                  painter: _FoldShadowPainter(edgeX: edgeX, onTop: false),
+                  size: Size(w, h),
+                ),
+            ],
+          ),
+        );
+      }
+      final r = -d; // 0 → 1
+      if (_dragForward) {
+        // 前翻：卷入的页钉住，弧形裁剪从右缘逐渐展开
+        final edgeX = w * (1 - r);
+        return Transform.translate(
+          offset: Offset(d * w, 0),
+          child: ClipPath(
+            clipper: _CurlClipper(edgeX: edgeX, height: h),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                content,
+                CustomPaint(
+                  painter: _FoldShadowPainter(edgeX: edgeX, onTop: true),
+                  size: Size(w, h),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      // 后翻：当前页自然右移离场，左缘绘制折痕
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          content,
+          CustomPaint(
+            painter: _FoldShadowPainter(edgeX: 0, onTop: true),
+            size: Size(w, h),
+          ),
+        ],
+      );
+    });
+  }
+
+  // ---------- 滚动模式 ----------
 
   Widget _scrollBody(
       ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
@@ -355,6 +494,20 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   // ---------- 菜单 ----------
+
+  /// 拖动进度条时的实时章节提示。
+  String _chapterLabelFor(int charOffset) {
+    if (rs.chapterStartChars.isEmpty || rs.totalChars == 0) return '';
+    int idx = 0;
+    for (int i = 0; i < rs.chapterStartChars.length; i++) {
+      if (rs.chapterStartChars[i] <= charOffset) idx = i;
+    }
+    final title = rs.chapters[idx].title;
+    final short = title.length > 10 ? '${title.substring(0, 10)}…' : title;
+    final pct = (charOffset / rs.totalChars * 100).clamp(0.0, 100.0)
+        .toStringAsFixed(0);
+    return '第${idx + 1}章 $short（$pct%）';
+  }
 
   Widget _menuOverlay(ReaderConfig cfg, ReaderPalette palette, bool isDark) {
     final themeState = context.read<ThemeState>();
@@ -418,6 +571,21 @@ class _ReaderPageState extends State<ReaderPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // 拖动时的实时章节提示
+                  if (_menuDragging && _sliderChapterLabel.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primaryContainer,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(_sliderChapterLabel,
+                          style: const TextStyle(fontSize: 13)),
+                    ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
@@ -434,14 +602,18 @@ class _ReaderPageState extends State<ReaderPage> {
                             onChangeStart: (v) {
                               _menuDragging = true;
                               _sliderPreview = v;
+                              _sliderChapterLabel = _chapterLabelFor(v.round());
                             },
                             onChangeEnd: (v) {
                               _menuDragging = false;
                               _sliderPreview = null;
+                              _sliderChapterLabel = '';
                               _jumpToGlobalOffset(v.round());
                             },
-                            onChanged: (v) =>
-                                setState(() => _sliderPreview = v),
+                            onChanged: (v) => setState(() {
+                              _sliderPreview = v;
+                              _sliderChapterLabel = _chapterLabelFor(v.round());
+                            }),
                           ),
                         ),
                         Text('第${rs.currentChapter + 1}/${rs.chapters.length}章',
@@ -449,42 +621,51 @@ class _ReaderPageState extends State<ReaderPage> {
                       ],
                     ),
                   ),
+                  // 第一行：章节导航 + 目录 + 书签列表
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      TextButton.icon(
-                        onPressed: rs.currentChapter > 0
+                      _barButton(
+                        icon: Icons.skip_previous,
+                        label: '上一章',
+                        onTap: rs.currentChapter > 0
                             ? () => _goChapter(rs.currentChapter - 1)
                             : null,
-                        icon: const Icon(Icons.skip_previous, size: 20),
-                        label: const Text('上一章'),
                       ),
-                      TextButton.icon(
-                        onPressed: _showToc,
-                        icon: const Icon(Icons.menu_book_outlined, size: 20),
-                        label: const Text('目录'),
+                      _barButton(
+                        icon: Icons.menu_book_outlined,
+                        label: '目录',
+                        onTap: _showToc,
                       ),
-                      TextButton.icon(
-                        onPressed: _toggleBookmark,
-                        icon: Icon(
-                          _hasBookmarkHere()
-                              ? Icons.bookmark
-                              : Icons.bookmark_border,
-                          size: 20,
-                        ),
-                        label: const Text('书签'),
+                      _barButton(
+                        icon: Icons.bookmarks_outlined,
+                        label: rs.bookmarks.isEmpty
+                            ? '书签'
+                            : '书签 ${rs.bookmarks.length}',
+                        onTap: rs.bookmarks.isEmpty ? null : _showBookmarks,
                       ),
-                      TextButton.icon(
-                        onPressed: _showSettings,
-                        icon: const Icon(Icons.settings_outlined, size: 20),
-                        label: const Text('设置'),
-                      ),
-                      TextButton.icon(
-                        onPressed: rs.currentChapter < rs.chapters.length - 1
+                      _barButton(
+                        icon: Icons.skip_next,
+                        label: '下一章',
+                        onTap: rs.currentChapter < rs.chapters.length - 1
                             ? () => _goChapter(rs.currentChapter + 1)
                             : null,
-                        icon: const Icon(Icons.skip_next, size: 20),
-                        label: const Text('下一章'),
+                      ),
+                    ],
+                  ),
+                  // 第二行：书签增删 + 设置
+                  Row(
+                    children: [
+                      _barButton(
+                        icon: _hasBookmarkHere()
+                            ? Icons.bookmark
+                            : Icons.bookmark_border,
+                        label: _hasBookmarkHere() ? '删书签' : '加书签',
+                        onTap: _toggleBookmark,
+                      ),
+                      _barButton(
+                        icon: Icons.settings_outlined,
+                        label: '设置',
+                        onTap: _showSettings,
                       ),
                     ],
                   ),
@@ -493,6 +674,34 @@ class _ReaderPageState extends State<ReaderPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _barButton(
+      {required IconData icon, required String label, VoidCallback? onTap}) {
+    final enabled = onTap != null;
+    final color = enabled
+        ? Theme.of(context).colorScheme.onSurface
+        : Theme.of(context).disabledColor;
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 7),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 21, color: color),
+              const SizedBox(height: 2),
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11.5, color: color)),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -508,7 +717,6 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _jumpToGlobalOffset(int charOffset) {
-    // 找到目标章
     int ch = 0;
     for (int i = 0; i < rs.chapterStartChars.length; i++) {
       if (rs.chapterStartChars[i] <= charOffset) ch = i;
@@ -567,6 +775,74 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
+  /// 书签列表：显示各书签所在章节与原文预览，点击跳转，可删除。
+  void _showBookmarks() {
+    _toggleMenu();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.55,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, controller) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text('书签 · 共${rs.bookmarks.length}条',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            Expanded(
+              child: rs.bookmarks.isEmpty
+                  ? const Center(
+                      child: Text('还没有书签，阅读时点「加书签」即可保存位置',
+                          style: TextStyle(color: Colors.grey)))
+                  : ListView.builder(
+                      controller: controller,
+                      itemCount: rs.bookmarks.length,
+                      itemBuilder: (ctx, i) {
+                        final bm = rs.bookmarks[i];
+                        return ListTile(
+                          leading: const Icon(Icons.bookmark,
+                              color: Colors.deepOrange),
+                          title: Text(
+                            bm.chapterTitle.isEmpty
+                                ? '第${bm.chapterIndex + 1}章'
+                                : bm.chapterTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(
+                            bm.preview,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          trailing: Text(formatTimeCN(bm.createdAt),
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(ctx).hintColor)),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _goChapter(bm.chapterIndex,
+                                charOffset: bm.charOffset);
+                          },
+                          onLongPress: () async {
+                            await rs.removeBookmark(bm.id!);
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _toggleBookmark() async {
     final layout = _layout;
     if (layout == null) return;
@@ -577,13 +853,22 @@ class _ReaderPageState extends State<ReaderPage> {
         (b.charOffset - offset).abs() <= 200);
     if (existing.isNotEmpty) {
       await rs.removeBookmark(existing.first.id!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('已删除书签'), duration: Duration(milliseconds: 600)));
+      }
     } else {
       final ch = rs.chapters[rs.currentChapter];
+      final start = offset.clamp(0, ch.text.length - 1);
       final preview = ch.text
-          .substring(offset.clamp(0, ch.text.length - 1))
+          .substring(start)
           .replaceAll('\n', ' ');
       await rs.addBookmark(
           preview.substring(0, preview.length > 40 ? 40 : preview.length));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('已添加书签'), duration: Duration(milliseconds: 600)));
+      }
     }
   }
 
@@ -778,4 +1063,72 @@ class _ReaderPageState extends State<ReaderPage> {
       ),
     );
   }
+}
+
+/// 仿真翻页：卷页折痕处的阴影绘制。
+class _FoldShadowPainter extends CustomPainter {
+  final double edgeX;
+  final bool onTop; // true = 画在卷入页边缘（内侧亮/外侧暗），false = 投影到下面的页
+  _FoldShadowPainter({required this.edgeX, required this.onTop});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (edgeX <= 0 || edgeX >= size.width) return;
+    if (onTop) {
+      // 卷入页自身：边缘内侧先一条亮棱（纸页厚度），再渐变阴影
+      final hiRect = Rect.fromLTWH(edgeX, 0, 5, size.height);
+      canvas.drawRect(hiRect,
+          Paint()..color = Colors.white.withValues(alpha: 0.35));
+      final shadowRect = Rect.fromLTWH(edgeX + 5, 0, 26, size.height);
+      canvas.drawRect(
+          shadowRect,
+          Paint()
+            ..shader = LinearGradient(
+              colors: [
+                Colors.black.withValues(alpha: 0.18),
+                Colors.transparent,
+              ],
+            ).createShader(shadowRect));
+    } else {
+      // 下面的页：折痕左侧的投影
+      final shadowRect = Rect.fromLTWH(edgeX - 42, 0, 42, size.height);
+      canvas.drawRect(
+          shadowRect,
+          Paint()
+            ..shader = LinearGradient(
+              colors: [
+                Colors.transparent,
+                Colors.black.withValues(alpha: 0.30),
+              ],
+            ).createShader(shadowRect));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FoldShadowPainter old) =>
+      old.edgeX != edgeX || old.onTop != onTop;
+}
+
+/// 仿真翻页：卷入页的弧形裁剪（边缘略微向内弯，模拟纸页弯曲）。
+class _CurlClipper extends CustomClipper<Path> {
+  final double edgeX;
+  final double height;
+  _CurlClipper({required this.edgeX, required this.height});
+
+  @override
+  Path getClip(Size size) {
+    final x = edgeX.clamp(0.0, size.width);
+    final path = Path()
+      ..moveTo(x, 0)
+      // 边缘向内弯：中部比上下多露出 4% 宽度
+      ..quadraticBezierTo(
+          x + size.width * 0.04, size.height / 2, x, size.height)
+      ..lineTo(size.width, size.height)
+      ..lineTo(size.width, 0)
+      ..close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(_CurlClipper old) => old.edgeX != edgeX;
 }
