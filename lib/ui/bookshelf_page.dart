@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_info.dart';
 import '../core/book_format.dart';
 import '../data/book.dart';
 import '../state/library_state.dart';
 import 'book_detail_sheet.dart';
 import 'common.dart';
 import 'folders_page.dart';
+import 'general_settings_page.dart';
 import 'link_import_page.dart';
 import 'reader_page.dart';
 
@@ -307,7 +309,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('墨阅 · 纯本地小说阅读器（v1.2.0）',
+            Text('墨阅 · 纯本地小说阅读器（v${AppInfo.version}）',
                 style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 10),
             Text(
@@ -463,6 +465,14 @@ class _BookshelfPageState extends State<BookshelfPage> {
     return AppBar(
       title: const Text('墨阅'),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          tooltip: '通用设置',
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const GeneralSettingsPage()),
+          ),
+        ),
         IconButton(
           icon: const Icon(Icons.search),
           tooltip: '搜索',

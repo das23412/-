@@ -3,19 +3,21 @@ package com.moyue.reader
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 /**
- * MainActivity：负责接收“用墨阅打开”的 VIEW intent。
+ * MainActivity：负责接收“用墨阅打开”的 VIEW intent，以及拉起应用内更新的安装器。
  *
  * content:// URI 会被拷贝到应用私有缓存目录后把真实路径传给 Flutter，
  * 因此导入其他 App 的文件不需要任何存储权限。
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "moyue/intent"
+    private val installerChannelName = "moyue/installer"
     private var pendingPath: String? = null
     private var channel: MethodChannel? = null
 
@@ -28,7 +30,40 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, installerChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "installApk" -> {
+                        val path = call.arguments as? String
+                        if (path == null) {
+                            result.error("bad_args", "缺少 APK 路径", null)
+                        } else {
+                            try {
+                                installApk(path)
+                                result.success(true)
+                            } catch (e: Exception) {
+                                result.error("install_failed", e.message, null)
+                            }
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         handleIntent(intent)
+    }
+
+    /** 通过 FileProvider 拉起系统包安装器。 */
+    private fun installApk(path: String) {
+        val file = File(path)
+        if (!file.exists()) throw IllegalArgumentException("安装包不存在")
+        val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+            )
+        startActivity(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
