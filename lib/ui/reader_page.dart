@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:turn_page_transition/turn_page_transition.dart';
 
 import '../data/book.dart';
 import '../reader/paginate.dart';
@@ -12,6 +14,9 @@ import '../state/theme_state.dart';
 import 'common.dart';
 
 /// 阅读页。
+///
+/// 翻页采用“窗口式”结构：PageView 同时包含上一章、当前章、下一章的页面，
+/// 滑动可以无缝跨越章节边界（与番茄/起点等主流阅读器一致）。
 class ReaderPage extends StatefulWidget {
   final Book book;
   const ReaderPage({super.key, required this.book});
@@ -22,9 +27,17 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> {
   late final ReaderState rs;
-  PageController? _pageController;
+  PageController? _pageController; // 覆盖/平移模式
+  TurnPageController? _turnCtrl; // 仿真模式
   ScrollController? _scrollController;
-  ChapterLayout? _layout;
+  ChapterLayout? _layout; // 当前章布局
+  ChapterLayout? _prevLayout; // 窗口内上一章布局
+  ChapterLayout? _nextLayout; // 窗口内下一章布局
+  int _windowChapter = -1;
+  String _windowKey = '';
+  int _winPrevCount = 0;
+  int _winNextCount = 0;
+
   bool _menuVisible = false;
   bool _scrollAttached = false;
   int _restoredForChapter = -1;
@@ -32,7 +45,6 @@ class _ReaderPageState extends State<ReaderPage> {
   int? _pendingCharOffset;
   double? _sliderPreview;
   String _sliderChapterLabel = '';
-  bool _dragForward = true; // 仿真翻页的方向感知
 
   @override
   void initState() {
@@ -103,10 +115,25 @@ class _ReaderPageState extends State<ReaderPage> {
       _scrollToNextPage(layout);
       return;
     }
+    if (mode == 0) {
+      final ctrl = _turnCtrl;
+      if (ctrl == null) return;
+      if (ctrl.currentIndex < _windowTotal - 1) {
+        ctrl.nextPage();
+        _syncProgressAt(ctrl.currentIndex);
+      } else if (rs.currentChapter < rs.chapters.length - 1) {
+        _goChapter(rs.currentChapter + 1);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('已经是最后一页了'), duration: Duration(milliseconds: 600)));
+      }
+      return;
+    }
     final pc = _pageController;
     if (pc == null || !pc.hasClients) return;
     final cur = pc.page?.round() ?? 0;
-    if (cur < layout.pageCount - 1) {
+    final total = _winPrevCount + layout.pageCount + _winNextCount;
+    if (cur < total - 1) {
       pc.animateToPage(cur + 1,
           duration: const Duration(milliseconds: 260), curve: Curves.easeOut);
     } else if (rs.currentChapter < rs.chapters.length - 1) {
@@ -123,6 +150,18 @@ class _ReaderPageState extends State<ReaderPage> {
     final mode = context.read<ReaderConfig>().settings.pageMode;
     if (mode == 3) {
       _scrollToPrevPage(layout);
+      return;
+    }
+    if (mode == 0) {
+      final ctrl = _turnCtrl;
+      if (ctrl == null) return;
+      if (ctrl.currentIndex > 0) {
+        ctrl.previousPage();
+        _syncProgressAt(ctrl.currentIndex);
+      } else if (rs.currentChapter > 0) {
+        _pendingJumpEnd = true;
+        _goChapter(rs.currentChapter - 1);
+      }
       return;
     }
     final pc = _pageController;
@@ -163,20 +202,28 @@ class _ReaderPageState extends State<ReaderPage> {
         rs.chapters.isNotEmpty) {
       final layout = _layout!;
       final line = layout.lineIndexOfChar(charOffset);
-      final page = layout.pageOfLine(line);
+      final pageInChapter = layout.pageOfLine(line);
+      final windowIndex = _winPrevCount + pageInChapter;
       if (context.read<ReaderConfig>().settings.pageMode == 3) {
-        _scrollController?.jumpTo((page * layout.linesPerPage * layout.lineHeight)
+        _scrollController?.jumpTo((pageInChapter *
+                layout.linesPerPage *
+                layout.lineHeight)
             .clamp(0.0, double.infinity));
+      } else if (context.read<ReaderConfig>().settings.pageMode == 0) {
+        _turnCtrl?.jumpToPage(windowIndex.clamp(0, _windowTotal - 1));
       } else if (_pageController?.hasClients ?? false) {
-        _pageController!.jumpToPage(page);
+        _pageController!.jumpToPage(windowIndex.clamp(0, _windowTotal - 1));
       }
-      rs.onPageChanged(idx, page, charOffset);
+      rs.onPageChanged(idx, pageInChapter, charOffset);
       return;
     }
     _pendingCharOffset = charOffset;
     _pendingJumpEnd = charOffset == null && _pendingJumpEnd;
     rs.goToChapter(idx, charOffset: charOffset ?? 0);
   }
+
+  int get _windowTotal =>
+      _winPrevCount + (_layout?.pageCount ?? 0) + _winNextCount;
 
   // ---------- 构建 ----------
 
@@ -265,38 +312,67 @@ class _ReaderPageState extends State<ReaderPage> {
         rs.currentChapter, style, textWidth, textHeight, cfg.settings.indent);
     _layout = layout;
 
-    // 恢复进度 / 章节跳转，只对每章执行一次
-    if (_restoredForChapter != rs.currentChapter) {
+    // 窗口计算：把上一章/下一章的页面拼进同一个 PageView
+    final windowKey =
+        '${cfg.layoutKey}_${rs.currentChapter}_${textWidth}x$textHeight';
+    if (_windowChapter != rs.currentChapter || _windowKey != windowKey) {
+      _windowKey = windowKey;
+      _windowChapter = rs.currentChapter;
+      _prevLayout = rs.currentChapter > 0
+          ? rs.layoutFor(rs.currentChapter - 1, style, textWidth, textHeight,
+              cfg.settings.indent)
+          : null;
+      _nextLayout = rs.currentChapter < rs.chapters.length - 1
+          ? rs.layoutFor(rs.currentChapter + 1, style, textWidth, textHeight,
+              cfg.settings.indent)
+          : null;
+      _winPrevCount = _prevLayout?.pageCount ?? 0;
+      _winNextCount = _nextLayout?.pageCount ?? 0;
+      _turnCtrl = null; // 窗口变化后重建仿真翻页控制器
+    }
+
+    // 进度恢复 / 跳章 / 跨章滑动后的落点
+    if (_restoredForChapter != rs.currentChapter ||
+        _pendingCharOffset != null) {
       _restoredForChapter = rs.currentChapter;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        int targetPage;
+        int pageInChapter;
         if (_pendingCharOffset != null) {
           final line = layout.lineIndexOfChar(_pendingCharOffset!);
-          targetPage = layout.pageOfLine(line);
+          pageInChapter = layout.pageOfLine(line);
           _pendingCharOffset = null;
         } else if (_pendingJumpEnd) {
-          targetPage = layout.pageCount - 1;
+          pageInChapter = layout.pageCount - 1;
           _pendingJumpEnd = false;
         } else {
-          targetPage = rs.restorePage(layout);
+          pageInChapter = rs.restorePage(layout);
         }
+        final target = ((_winPrevCount + pageInChapter)
+                .clamp(0, math.max(0, _windowTotal - 1)))
+            .toInt();
         if (cfg.settings.pageMode == 3) {
           _scrollController?.jumpTo(
-              (targetPage * layout.linesPerPage * layout.lineHeight)
+              (pageInChapter * layout.linesPerPage * layout.lineHeight)
                   .clamp(0.0, double.infinity));
         } else {
           if (_pageController?.hasClients ?? false) {
-            _pageController?.jumpToPage(targetPage);
+            _pageController!.jumpToPage(target);
           }
         }
-        rs.currentPage = targetPage;
+        rs.currentPage = pageInChapter;
       });
     }
 
-    final body = cfg.settings.pageMode == 3
-        ? _scrollBody(layout, palette, cfg)
-        : _pageBody(layout, palette, cfg);
+    Widget body;
+    switch (cfg.settings.pageMode) {
+      case 0:
+        body = _turnBody(palette, cfg);
+      case 3:
+        body = _scrollBody(layout, palette, cfg);
+      default:
+        body = _pageBody(layout, palette, cfg);
+    }
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
@@ -333,62 +409,112 @@ class _ReaderPageState extends State<ReaderPage> {
 
   // ---------- 翻页模式（仿真 / 平移 / 覆盖） ----------
 
+  /// 窗口索引 → 该页使用的布局、章内页码、章节序号。
+  (ChapterLayout, int, int) _mapWindowIndex(int v) {
+    final curCount = _layout?.pageCount ?? 0;
+    if (v < _winPrevCount && _prevLayout != null) {
+      return (_prevLayout!, v, rs.currentChapter - 1);
+    }
+    if (v < _winPrevCount + curCount || _nextLayout == null) {
+      return (_layout!, v - _winPrevCount, rs.currentChapter);
+    }
+    return (
+      _nextLayout!,
+      v - _winPrevCount - curCount,
+      rs.currentChapter + 1
+    );
+  }
+
+  /// 把窗口索引 v 处的页面同步为当前阅读进度（跨章时自动切换章节）。
+  void _syncProgressAt(int v) {
+    final mapped = _mapWindowIndex(v);
+    final lay = mapped.$1;
+    final pageInChapter = mapped.$2;
+    final chapterIdx = mapped.$3;
+    final charOffset = lay.charOffsetOfLine(pageInChapter * lay.linesPerPage);
+    if (chapterIdx == rs.currentChapter) {
+      rs.onPageChanged(rs.currentChapter, pageInChapter, charOffset);
+      return;
+    }
+    // 跨章滑动：切换章节，用 charOffset 在新窗口中精确定位落点页
+    rs.goToChapter(chapterIdx, charOffset: charOffset);
+    rs.onPageChanged(chapterIdx, pageInChapter, charOffset);
+    _pendingCharOffset = charOffset;
+  }
+
+  /// 仿真模式：turn_page_transition 的 TurnPageView + 窗口式页面。
+  /// （效果移植自开源库 turn_page_transition，MIT License，© Shoryu-Y）
+  Widget _turnBody(ReaderPalette palette, ReaderConfig cfg) {
+    _turnCtrl ??= TurnPageController(
+        initialPage: (_winPrevCount + rs.currentPage)
+            .clamp(0, math.max(0, _windowTotal - 1)));
+    final style = _style(cfg, palette);
+    return TurnPageView.builder(
+      key: ValueKey(_windowKey),
+      controller: _turnCtrl,
+      itemCount: _windowTotal,
+      useOnTap: false, // 点击分区（翻页/呼出菜单）由外层手势处理
+      onSwipe: (_) => _syncProgressAt(_turnCtrl!.currentIndex),
+      overleafColorBuilder: (_) => palette.background, // 卷起页背面与纸色一致
+      overleafBorderColorBuilder: (_) =>
+          palette.secondary.withValues(alpha: 0.4),
+      overleafBorderWidthBuilder: (_) => 0.8,
+      itemBuilder: (ctx, v) {
+        final mapped = _mapWindowIndex(v);
+        // 页面必须不透明：卷起/覆盖时新页要能真正“盖住”旧页
+        return Container(
+          color: palette.background,
+          alignment: Alignment.topLeft,
+          child: Text(
+            mapped.$1.pageText(mapped.$2),
+            style: style,
+          ),
+        );
+      },
+    );
+  }
+
+  /// 覆盖 / 平移模式：PageView + 窗口式页面。
   Widget _pageBody(ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
     final style = _style(cfg, palette);
-    final mode = cfg.settings.pageMode; // 0 仿真 / 1 平移 / 2 覆盖
+    final mode = cfg.settings.pageMode; // 1 平移 / 2 覆盖
     _pageController ??= PageController();
     final pc = _pageController!;
-    return NotificationListener<ScrollNotification>(
-      onNotification: (n) {
-        if (n is ScrollUpdateNotification && n.scrollDelta != null) {
-          if (n.scrollDelta! < 0) {
-            _dragForward = true;
-          } else if (n.scrollDelta! > 0) {
-            _dragForward = false;
-          }
-        }
-        return false;
+    return PageView.builder(
+      controller: pc,
+      itemCount: _windowTotal,
+      onPageChanged: _syncProgressAt,
+      itemBuilder: (ctx, v) {
+        final mapped = _mapWindowIndex(v);
+        // 页面必须不透明：覆盖模式中新页要能真正“盖住”旧页
+        final content = Container(
+          color: palette.background,
+          alignment: Alignment.topLeft,
+          child: Text(
+            mapped.$1.pageText(mapped.$2),
+            style: style,
+          ),
+        );
+        if (mode == 1) return content;
+        return AnimatedBuilder(
+          animation: pc,
+          builder: (ctx, _) {
+            double value = v.toDouble();
+            if (pc.hasClients && pc.position.haveDimensions && pc.page != null) {
+              value = pc.page!;
+            }
+            final d = value - v; // >0 当前页(在锚点左侧)，<0 即将盖入的页
+            if (d.abs() < 0.001) return content;
+            return _coverPage(content, d);
+          },
+        );
       },
-      child: PageView.builder(
-        controller: pc,
-        itemCount: layout.pageCount,
-        onPageChanged: (page) {
-          final charOffset =
-              layout.charOffsetOfLine(page * layout.linesPerPage);
-          rs.onPageChanged(rs.currentChapter, page, charOffset);
-        },
-        itemBuilder: (ctx, page) {
-          // 页面必须不透明：覆盖/仿真模式中新页要能真正“盖住”旧页，
-          // 透明背景会导致两页文字重叠
-          final content = Container(
-            color: palette.background,
-            alignment: Alignment.topLeft,
-            child: Text(layout.pageText(page), style: style),
-          );
-          if (mode == 1) return content;
-          return AnimatedBuilder(
-            animation: pc,
-            builder: (ctx, _) {
-              double value = page.toDouble();
-              if (pc.hasClients && pc.position.haveDimensions && pc.page != null) {
-                value = pc.page!;
-              }
-              final d = value - page; // >0 当前页(在锚点左侧)，<0 即将盖入的页
-              if (d.abs() < 0.001) return content;
-              return mode == 2
-                  ? _coverPage(content, d)
-                  : _curlPage(content, d);
-            },
-          );
-        },
-      ),
     );
   }
 
   /// 覆盖模式：当前页钉住不动，新页不透明地从右侧滑入盖在上面，左缘带落影。
   Widget _coverPage(Widget content, double d) {
     if (d > 0) {
-      // 当前页：钉住原位（其内容会被不透明的新页逐渐盖住）
       return LayoutBuilder(builder: (ctx, box) {
         return Transform.translate(
           offset: Offset(d * box.maxWidth, 0),
@@ -396,7 +522,6 @@ class _ReaderPageState extends State<ReaderPage> {
         );
       });
     }
-    // 盖入页：自然滑动（位于上层绘制），左缘加落影增强“盖上去”的感觉
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -418,65 +543,6 @@ class _ReaderPageState extends State<ReaderPage> {
         ),
       ],
     );
-  }
-
-  /// 仿真模式：两页都钉住，用“卷页揭示”取代平移——
-  /// 前翻时新页以弧形折痕从右缘逐渐展开；后翻时当前页自然右移、左缘带折痕阴影。
-  Widget _curlPage(Widget content, double d) {
-    return LayoutBuilder(builder: (ctx, box) {
-      final w = box.maxWidth;
-      final h = box.maxHeight;
-      if (d > 0) {
-        // 底下的页：钉住，折痕处画投影
-        final edgeX = _dragForward ? w * (1 - d) : w * d;
-        return Transform.translate(
-          offset: Offset(d * w, 0),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              content,
-              if (d < 0.999)
-                CustomPaint(
-                  painter: _FoldShadowPainter(edgeX: edgeX, onTop: false),
-                  size: Size(w, h),
-                ),
-            ],
-          ),
-        );
-      }
-      final r = -d; // 0 → 1
-      if (_dragForward) {
-        // 前翻：卷入的页钉住，弧形裁剪从右缘逐渐展开
-        final edgeX = w * (1 - r);
-        return Transform.translate(
-          offset: Offset(d * w, 0),
-          child: ClipPath(
-            clipper: _CurlClipper(edgeX: edgeX, height: h),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                content,
-                CustomPaint(
-                  painter: _FoldShadowPainter(edgeX: edgeX, onTop: true),
-                  size: Size(w, h),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-      // 后翻：当前页自然右移离场，左缘绘制折痕
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          content,
-          CustomPaint(
-            painter: _FoldShadowPainter(edgeX: 0, onTop: true),
-            size: Size(w, h),
-          ),
-        ],
-      );
-    });
   }
 
   // ---------- 滚动模式 ----------
@@ -1077,72 +1143,4 @@ class _ReaderPageState extends State<ReaderPage> {
       ),
     );
   }
-}
-
-/// 仿真翻页：卷页折痕处的阴影绘制。
-class _FoldShadowPainter extends CustomPainter {
-  final double edgeX;
-  final bool onTop; // true = 画在卷入页边缘（内侧亮/外侧暗），false = 投影到下面的页
-  _FoldShadowPainter({required this.edgeX, required this.onTop});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (edgeX <= 0 || edgeX >= size.width) return;
-    if (onTop) {
-      // 卷入页自身：边缘内侧先一条亮棱（纸页厚度），再渐变阴影
-      final hiRect = Rect.fromLTWH(edgeX, 0, 5, size.height);
-      canvas.drawRect(hiRect,
-          Paint()..color = Colors.white.withValues(alpha: 0.35));
-      final shadowRect = Rect.fromLTWH(edgeX + 5, 0, 26, size.height);
-      canvas.drawRect(
-          shadowRect,
-          Paint()
-            ..shader = LinearGradient(
-              colors: [
-                Colors.black.withValues(alpha: 0.18),
-                Colors.transparent,
-              ],
-            ).createShader(shadowRect));
-    } else {
-      // 下面的页：折痕左侧的投影
-      final shadowRect = Rect.fromLTWH(edgeX - 42, 0, 42, size.height);
-      canvas.drawRect(
-          shadowRect,
-          Paint()
-            ..shader = LinearGradient(
-              colors: [
-                Colors.transparent,
-                Colors.black.withValues(alpha: 0.30),
-              ],
-            ).createShader(shadowRect));
-    }
-  }
-
-  @override
-  bool shouldRepaint(_FoldShadowPainter old) =>
-      old.edgeX != edgeX || old.onTop != onTop;
-}
-
-/// 仿真翻页：卷入页的弧形裁剪（边缘略微向内弯，模拟纸页弯曲）。
-class _CurlClipper extends CustomClipper<Path> {
-  final double edgeX;
-  final double height;
-  _CurlClipper({required this.edgeX, required this.height});
-
-  @override
-  Path getClip(Size size) {
-    final x = edgeX.clamp(0.0, size.width);
-    final path = Path()
-      ..moveTo(x, 0)
-      // 边缘向内弯：中部比上下多露出 4% 宽度
-      ..quadraticBezierTo(
-          x + size.width * 0.04, size.height / 2, x, size.height)
-      ..lineTo(size.width, size.height)
-      ..lineTo(size.width, 0)
-      ..close();
-    return path;
-  }
-
-  @override
-  bool shouldReclip(_CurlClipper old) => old.edgeX != edgeX;
 }

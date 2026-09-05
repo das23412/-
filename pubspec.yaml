@@ -2,7 +2,7 @@ name: moyue
 description: "墨阅 — 纯本地、无联网的中文小说阅读器（TXT/EPUB/MOBI/AZW3/FB2/HTML）"
 publish_to: 'none'
 
-version: 1.3.0+6
+version: 1.4.0+7
 
 environment:
   sdk: ^3.13.1
@@ -33,6 +33,8 @@ dependencies:
   fast_gbk: ^1.0.0
   # “所有文件访问”权限引导
   permission_handler: ">=11.3.1 <13.0.0"
+  # 仿真翻页效果（MIT，基于 turn_page_transition 项目集成）
+  turn_page_transition: ^0.5.0
 
 dev_dependencies:
   flutter_test:
