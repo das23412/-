@@ -4,10 +4,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:turn_page_transition/turn_page_transition.dart';
 
 import '../data/book.dart';
 import '../reader/paginate.dart';
+import '../reader/turn_page/turn_page_view.dart';
 import '../state/reader_config.dart';
 import '../state/reader_state.dart';
 import '../state/theme_state.dart';
@@ -45,6 +45,7 @@ class _ReaderPageState extends State<ReaderPage> {
   int? _pendingCharOffset;
   double? _sliderPreview;
   String _sliderChapterLabel = '';
+  EdgeInsets _pagePad = const EdgeInsets.fromLTRB(18, 40, 18, 28); // 页内文字边距
 
   @override
   void initState() {
@@ -304,9 +305,11 @@ class _ReaderPageState extends State<ReaderPage> {
 
   Widget _content(
       BuildContext ctx, BoxConstraints box, ReaderConfig cfg, ReaderPalette palette) {
-    final pad = const EdgeInsets.fromLTRB(18, 40, 18, 24);
-    final textWidth = box.maxWidth - pad.horizontal;
-    final textHeight = box.maxHeight - pad.vertical;
+    // 页面全屏铺满（翻页效果覆盖整屏），文字边距画在页面内部
+    _pagePad = EdgeInsets.fromLTRB(
+        18, MediaQuery.of(ctx).padding.top + 36, 18, 28);
+    final textWidth = box.maxWidth - _pagePad.horizontal;
+    final textHeight = box.maxHeight - _pagePad.vertical;
     final style = _style(cfg, palette);
     final layout = rs.layoutFor(
         rs.currentChapter, style, textWidth, textHeight, cfg.settings.indent);
@@ -369,7 +372,7 @@ class _ReaderPageState extends State<ReaderPage> {
       case 0:
         body = _turnBody(palette, cfg);
       case 3:
-        body = _scrollBody(layout, palette, cfg);
+        body = Padding(padding: _pagePad, child: _scrollBody(layout, palette, cfg));
       default:
         body = _pageBody(layout, palette, cfg);
     }
@@ -380,10 +383,7 @@ class _ReaderPageState extends State<ReaderPage> {
       child: Stack(
         children: [
           Positioned.fill(child: _background(cfg, isDark: false)),
-          Padding(
-            padding: pad,
-            child: body,
-          ),
+          Positioned.fill(child: body),
         ],
       ),
     );
@@ -461,9 +461,10 @@ class _ReaderPageState extends State<ReaderPage> {
       overleafBorderWidthBuilder: (_) => 0.8,
       itemBuilder: (ctx, v) {
         final mapped = _mapWindowIndex(v);
-        // 页面必须不透明：卷起/覆盖时新页要能真正“盖住”旧页
+        // 页面必须不透明且全屏铺满：卷起/覆盖时新页要能真正“盖住”旧页
         return Container(
           color: palette.background,
+          padding: _pagePad,
           alignment: Alignment.topLeft,
           child: Text(
             mapped.$1.pageText(mapped.$2),
@@ -486,9 +487,10 @@ class _ReaderPageState extends State<ReaderPage> {
       onPageChanged: _syncProgressAt,
       itemBuilder: (ctx, v) {
         final mapped = _mapWindowIndex(v);
-        // 页面必须不透明：覆盖模式中新页要能真正“盖住”旧页
+        // 页面必须不透明且全屏铺满：覆盖模式中新页要能真正“盖住”旧页
         final content = Container(
           color: palette.background,
+          padding: _pagePad,
           alignment: Alignment.topLeft,
           child: Text(
             mapped.$1.pageText(mapped.$2),
