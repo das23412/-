@@ -358,7 +358,11 @@ class _ReaderPageState extends State<ReaderPage> {
           rs.onPageChanged(rs.currentChapter, page, charOffset);
         },
         itemBuilder: (ctx, page) {
-          final content = SizedBox.expand(
+          // 页面必须不透明：覆盖/仿真模式中新页要能真正“盖住”旧页，
+          // 透明背景会导致两页文字重叠
+          final content = Container(
+            color: palette.background,
+            alignment: Alignment.topLeft,
             child: Text(layout.pageText(page), style: style),
           );
           if (mode == 1) return content;
@@ -381,46 +385,39 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
-  /// 覆盖模式：即将显示的页保持静止从右侧“盖”到当前页上，当前页钉住并逐渐变暗。
+  /// 覆盖模式：当前页钉住不动，新页不透明地从右侧滑入盖在上面，左缘带落影。
   Widget _coverPage(Widget content, double d) {
-    return LayoutBuilder(builder: (ctx, box) {
-      final w = box.maxWidth;
-      if (d > 0) {
-        // 当前页：钉住 + 按进度压暗
+    if (d > 0) {
+      // 当前页：钉住原位（其内容会被不透明的新页逐渐盖住）
+      return LayoutBuilder(builder: (ctx, box) {
         return Transform.translate(
-          offset: Offset(d * w, 0),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              content,
-              Container(color: Colors.black.withValues(alpha: (d * 0.45).clamp(0.0, 0.45))),
-            ],
-          ),
+          offset: Offset(d * box.maxWidth, 0),
+          child: content,
         );
-      }
-      // 盖入页：正常滑动（位于上层），左缘加落影增强“盖上去”的感觉
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          content,
-          Positioned(
-            left: 0, top: 0, bottom: 0, width: 16,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.black.withValues(alpha: 0.28),
-                      Colors.transparent,
-                    ],
-                  ),
+      });
+    }
+    // 盖入页：自然滑动（位于上层绘制），左缘加落影增强“盖上去”的感觉
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        content,
+        Positioned(
+          left: 0, top: 0, bottom: 0, width: 26,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.black.withValues(alpha: 0.32),
+                    Colors.transparent,
+                  ],
                 ),
               ),
             ),
           ),
-        ],
-      );
-    });
+        ),
+      ],
+    );
   }
 
   /// 仿真模式：两页都钉住，用“卷页揭示”取代平移——
