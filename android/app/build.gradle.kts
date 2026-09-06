@@ -26,6 +26,14 @@ android {
     }
 
     signingConfigs {
+        // 固定使用仓库内置的调试密钥：保证任何环境（本地/CI）构建的 APK 签名一致，
+        // 各版本之间可以直接覆盖安装。密钥为公开调试密钥，仅用于侧载分发。
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (keystorePropertiesFile.exists()) {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
