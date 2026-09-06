@@ -46,6 +46,7 @@ class _ReaderPageState extends State<ReaderPage> {
   double? _sliderPreview;
   String _sliderChapterLabel = '';
   EdgeInsets _pagePad = const EdgeInsets.fromLTRB(18, 40, 18, 28); // 页内文字边距
+  int _lastPageMode = -1; // 检测翻页方式切换，重建控制器并回定位
 
   @override
   void initState() {
@@ -235,6 +236,21 @@ class _ReaderPageState extends State<ReaderPage> {
         fontFamily: cfg.fontReady ? 'MoyueCustom' : null,
       );
 
+  /// 页面背景装饰：色卡或自定义图片（全屏不透明页面必须自带背景）。
+  Decoration _pageDecoration(ReaderConfig cfg, ReaderPalette palette) {
+    final bgPath = cfg.settings.customBgPath;
+    if (cfg.settings.bgIndex == -1 && bgPath.isNotEmpty) {
+      final f = File(bgPath);
+      if (f.existsSync()) {
+        return BoxDecoration(
+          image: DecorationImage(
+              image: FileImage(f), fit: BoxFit.cover, opacity: 0.9),
+        );
+      }
+    }
+    return BoxDecoration(color: palette.background);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = context.watch<ReaderConfig>();
@@ -308,6 +324,16 @@ class _ReaderPageState extends State<ReaderPage> {
     // 页面全屏铺满（翻页效果覆盖整屏），文字边距画在页面内部
     _pagePad = EdgeInsets.fromLTRB(
         18, MediaQuery.of(ctx).padding.top + 36, 18, 28);
+    // 翻页方式切换：重建各翻页控制器，并把落点重定位到当前进度
+    if (_lastPageMode != cfg.settings.pageMode) {
+      _lastPageMode = cfg.settings.pageMode;
+      _pageController = null; // 旧控制器随旧组件释放，这里仅脱离引用
+      _scrollController = null;
+      _scrollAttached = false;
+      _turnCtrl = null;
+      _restoredForChapter = -1;
+      _pendingCharOffset = rs.charOffsetInChapter;
+    }
     final textWidth = box.maxWidth - _pagePad.horizontal;
     final textHeight = box.maxHeight - _pagePad.vertical;
     final style = _style(cfg, palette);
@@ -449,8 +475,10 @@ class _ReaderPageState extends State<ReaderPage> {
         initialPage: (_winPrevCount + rs.currentPage)
             .clamp(0, math.max(0, _windowTotal - 1)));
     final style = _style(cfg, palette);
+    // key 含翻页方式：切换方式时强制重建 TurnPageView，
+    // 使新的控制器重新绑定动画（否则动画列表不会挂载）
     return TurnPageView.builder(
-      key: ValueKey(_windowKey),
+      key: ValueKey('turn${cfg.settings.pageMode}_$_windowKey'),
       controller: _turnCtrl,
       itemCount: _windowTotal,
       useOnTap: false, // 点击分区（翻页/呼出菜单）由外层手势处理
@@ -463,7 +491,7 @@ class _ReaderPageState extends State<ReaderPage> {
         final mapped = _mapWindowIndex(v);
         // 页面必须不透明且全屏铺满：卷起/覆盖时新页要能真正“盖住”旧页
         return Container(
-          color: palette.background,
+          decoration: _pageDecoration(cfg, palette),
           padding: _pagePad,
           alignment: Alignment.topLeft,
           child: Text(
@@ -489,7 +517,7 @@ class _ReaderPageState extends State<ReaderPage> {
         final mapped = _mapWindowIndex(v);
         // 页面必须不透明且全屏铺满：覆盖模式中新页要能真正“盖住”旧页
         final content = Container(
-          color: palette.background,
+          decoration: _pageDecoration(cfg, palette),
           padding: _pagePad,
           alignment: Alignment.topLeft,
           child: Text(

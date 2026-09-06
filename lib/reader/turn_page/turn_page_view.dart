@@ -121,7 +121,9 @@ class _TurnPageViewState extends State<TurnPageView>
 
   @override
   void didUpdateWidget(TurnPageView oldWidget) {
-    if (oldWidget.itemBuilder != widget.itemBuilder) {
+    // 仅在页数变化时重建页面列表（窗口切换时通过 key 重建整个组件）。
+    // 每次都重建会在阅读进度频繁刷新时重复构建整窗页面，造成卡顿。
+    if (oldWidget.itemCount != widget.itemCount) {
       generatePages();
     }
     super.didUpdateWidget(oldWidget);
@@ -138,32 +140,32 @@ class _TurnPageViewState extends State<TurnPageView>
   Widget build(BuildContext context) {
     final controller = widget.controller;
 
+    // 关键修复：关闭的交互必须传 null，让 GestureDetector 不注册对应的手势识别器。
+    // 否则点击识别器仍会参与手势竞技场并吞掉外层（阅读页）的点击——
+    // 表现为仿真模式下无法呼出菜单/设置。
     return LayoutBuilder(
       builder: (context, constraints) => GestureDetector(
-        onTapUp: (details) async {
-          if (!widget.useOnTap) {
-            return;
-          }
-          controller._onTapUp(
-            details: details,
-            constraints: constraints,
-          );
-        },
-        onHorizontalDragUpdate: (details) {
-          if (!widget.useOnSwipe) {
-            return;
-          }
-          controller._onHorizontalDragUpdate(
-            details: details,
-            constraints: constraints,
-          );
-        },
-        onHorizontalDragEnd: (_) {
-          if (!widget.useOnSwipe) {
-            return;
-          }
-          controller._onHorizontalDragEnd();
-        },
+        onTapUp: widget.useOnTap
+            ? (details) {
+                controller._onTapUp(
+                  details: details,
+                  constraints: constraints,
+                );
+              }
+            : null,
+        onHorizontalDragUpdate: widget.useOnSwipe
+            ? (details) {
+                controller._onHorizontalDragUpdate(
+                  details: details,
+                  constraints: constraints,
+                );
+              }
+            : null,
+        onHorizontalDragEnd: widget.useOnSwipe
+            ? (details) {
+                controller._onHorizontalDragEnd();
+              }
+            : null,
         child: Stack(
           children: pages,
         ),
