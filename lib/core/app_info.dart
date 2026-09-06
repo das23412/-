@@ -1,7 +1,7 @@
 /// 应用版本信息。发布新版本时与 pubspec.yaml 的 version 保持一致
 /// （见 docs/发布检查清单.md）。
 class AppInfo {
-  static const version = '1.4.3';
-  static const build = '10';
+  static const version = '1.4.4';
+  static const build = '11';
   static const display = 'v$version+$build';
 }

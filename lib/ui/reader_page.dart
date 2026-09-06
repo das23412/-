@@ -43,10 +43,11 @@ class _ReaderPageState extends State<ReaderPage> {
   int _restoredForChapter = -1;
   bool _pendingJumpEnd = false;
   int? _pendingCharOffset;
-  double? _sliderPreview;
-  String _sliderChapterLabel = '';
   EdgeInsets _pagePad = const EdgeInsets.fromLTRB(18, 40, 18, 28); // 页内文字边距
   int _lastPageMode = -1; // 检测翻页方式切换，重建控制器并回定位
+  String _turnKey = ''; // 仿真翻页的重建钥匙（窗口 + 外观状态）
+  double? _sliderPreview;
+  String _sliderChapterLabel = '';
 
   @override
   void initState() {
@@ -243,8 +244,7 @@ class _ReaderPageState extends State<ReaderPage> {
       final f = File(bgPath);
       if (f.existsSync()) {
         return BoxDecoration(
-          image: DecorationImage(
-              image: FileImage(f), fit: BoxFit.cover, opacity: 0.9),
+          image: DecorationImage(image: FileImage(f), fit: BoxFit.cover),
         );
       }
     }
@@ -358,6 +358,17 @@ class _ReaderPageState extends State<ReaderPage> {
       _winPrevCount = _prevLayout?.pageCount ?? 0;
       _winNextCount = _nextLayout?.pageCount ?? 0;
       _turnCtrl = null; // 窗口变化后重建仿真翻页控制器
+    }
+
+    // 外观（背景/文字颜色/翻页方式）变化时重建仿真翻页，
+    // 否则页面列表不刷新，会出现“背景换不了”的问题。
+    // 钥匙变化必须连锁重建控制器（旧控制器已被旧组件释放）。
+    final turnKey = 'turn${cfg.settings.pageMode}_'
+        '${palette.background.toARGB32()}_${palette.text.toARGB32()}_'
+        '${cfg.settings.bgIndex}_${cfg.settings.customBgPath}_$_windowKey';
+    if (_turnKey != turnKey) {
+      _turnKey = turnKey;
+      _turnCtrl = null;
     }
 
     // 进度恢复 / 跳章 / 跨章滑动后的落点
@@ -475,10 +486,9 @@ class _ReaderPageState extends State<ReaderPage> {
         initialPage: (_winPrevCount + rs.currentPage)
             .clamp(0, math.max(0, _windowTotal - 1)));
     final style = _style(cfg, palette);
-    // key 含翻页方式：切换方式时强制重建 TurnPageView，
-    // 使新的控制器重新绑定动画（否则动画列表不会挂载）
+    // key 含外观状态：切换背景/主题时强制重建 TurnPageView 刷新页面外观
     return TurnPageView.builder(
-      key: ValueKey('turn${cfg.settings.pageMode}_$_windowKey'),
+      key: ValueKey(_turnKey),
       controller: _turnCtrl,
       itemCount: _windowTotal,
       useOnTap: false, // 点击分区（翻页/呼出菜单）由外层手势处理
