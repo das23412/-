@@ -23,12 +23,14 @@ class ParsedBook {
   /// 避免打开书籍时在主线程把全书拼接成一个大字符串再统计。
   final int wordCount;
 
-  ParsedBook(this.chapters) {
-    int n = 0;
+  ParsedBook(this.chapters) : wordCount = _countChars(chapters);
+
+  static int _countChars(List<ParsedChapter> chapters) {
+    var n = 0;
     for (final c in chapters) {
       n += TextUtils.countChars(c.text);
     }
-    wordCount = n;
+    return n;
   }
 }
 
