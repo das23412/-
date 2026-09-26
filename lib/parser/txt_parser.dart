@@ -60,12 +60,11 @@ class TxtParser {
         consecutive = 0;
       }
     }
-    // 命中率过低时认为没有章节
-    if (marks.length < 2 ||
-        marks.length * 6 < lines.where((l) => l.trim().isNotEmpty).length) {
-      if (marks.length < 2) {
-        return _chunkBySize(bookTitle, text);
-      }
+    // 几乎检测不到章节（如纯文本散文）时按固定字数切块。
+    // 注意：不能额外按“标题行占比”放弃切分——正常小说的章节远比行数稀疏，
+    // 占比规则会把好书整本切成大块。
+    if (marks.length < 2) {
+      return _chunkBySize(bookTitle, text);
     }
     final chapters = <ParsedChapter>[];
     // 第一章之前的文字（若有）作为“开篇”

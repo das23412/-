@@ -407,10 +407,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
             icon: const Icon(Icons.push_pin_outlined),
             tooltip: '置顶',
             onPressed: () async {
-              for (final id in lib.selectedIds) {
-                final b = lib.books.firstWhere((e) => e.id == id);
-                if (!b.pinned) await lib.togglePin(b);
-              }
+              await lib.pinByIds(lib.selectedIds);
               lib.exitSelectionMode();
             },
           ),
@@ -493,38 +490,35 @@ class _BookshelfPageState extends State<BookshelfPage> {
   }
 
   Widget _tagBar(LibraryState lib) {
-    return FutureBuilder<Set<String>>(
-      future: lib.allTags(),
-      builder: (ctx, snap) {
-        final tags = snap.data ?? {};
-        if (tags.isEmpty) return const SizedBox.shrink();
-        return SizedBox(
-          height: 40,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  label: const Text('全部'),
-                  selected: lib.activeTag == null,
-                  onSelected: (_) => lib.setActiveTag(null),
-                ),
-              ),
-              for (final t in tags)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(t),
-                    selected: lib.activeTag == t,
-                    onSelected: (_) => lib.setActiveTag(t),
-                  ),
-                ),
-            ],
+    // 标签随 LibraryState.reload 刷新，直接读取缓存；
+    // 旧实现用 FutureBuilder，每次重建都会重新查一次数据库
+    final tags = lib.tags;
+    if (tags.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: const Text('全部'),
+              selected: lib.activeTag == null,
+              onSelected: (_) => lib.setActiveTag(null),
+            ),
           ),
-        );
-      },
+          for (final t in tags)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(t),
+                selected: lib.activeTag == t,
+                onSelected: (_) => lib.setActiveTag(t),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

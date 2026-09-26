@@ -19,6 +19,7 @@ enum _Phase { idle, downloading }
 
 class _LinkImportPageState extends State<LinkImportPage> {
   final _urlController = TextEditingController();
+  final _progressThrottler = ProgressThrottler();
   bool _allowNetwork = false;
   bool _busy = false; // 探测或下载中
   int _received = 0;
@@ -113,6 +114,7 @@ class _LinkImportPageState extends State<LinkImportPage> {
     if (confirmed != true) return;
 
     // 3. 下载
+    _progressThrottler.reset();
     setState(() {
       _busy = true;
       _phase = _Phase.downloading;
@@ -126,6 +128,7 @@ class _LinkImportPageState extends State<LinkImportPage> {
         dir,
         onProgress: (received, total) {
           if (!mounted) return;
+          if (!_progressThrottler.shouldEmit(received, total)) return;
           setState(() {
             _received = received;
             _total = total;

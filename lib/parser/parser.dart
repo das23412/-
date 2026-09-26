@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../core/book_format.dart';
+import '../core/text_utils.dart';
 import 'epub_parser.dart';
 import 'fb2_parser.dart';
 import 'html_parser.dart';
@@ -17,7 +18,18 @@ class ParsedChapter {
 /// 解析出的整本书。
 class ParsedBook {
   final List<ParsedChapter> chapters;
-  ParsedBook(this.chapters);
+
+  /// 全书字数（非空白字符）。在构造时（即解析所在的 isolate）逐章累加，
+  /// 避免打开书籍时在主线程把全书拼接成一个大字符串再统计。
+  final int wordCount;
+
+  ParsedBook(this.chapters) {
+    int n = 0;
+    for (final c in chapters) {
+      n += TextUtils.countChars(c.text);
+    }
+    wordCount = n;
+  }
 }
 
 /// 统一的文件解析入口。

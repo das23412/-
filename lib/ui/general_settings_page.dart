@@ -17,6 +17,7 @@ class GeneralSettingsPage extends StatefulWidget {
 enum _UpdateState { idle, checking, none, available, downloading, done }
 
 class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
+  final _progressThrottler = ProgressThrottler();
   bool _allowNetwork = false;
   _UpdateState _updateState = _UpdateState.idle;
   UpdateInfo? _update;
@@ -74,11 +75,13 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
       _error = null;
     });
     try {
+      _progressThrottler.reset();
       final path = await UpdateService.downloadApk(
         info.downloadUrl,
         info.version,
         onProgress: (received, total) {
           if (!mounted) return;
+          if (!_progressThrottler.shouldEmit(received, total)) return;
           setState(() {
             _received = received;
             _total = total;

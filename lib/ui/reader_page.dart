@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
@@ -46,6 +47,7 @@ class _ReaderPageState extends State<ReaderPage> {
   EdgeInsets _pagePad = const EdgeInsets.fromLTRB(18, 40, 18, 28); // 页内文字边距
   int _lastPageMode = -1; // 检测翻页方式切换，重建控制器并回定位
   String _turnKey = ''; // 仿真翻页的重建钥匙（窗口 + 外观状态）
+  String _prewarmedWindow = ''; // 已安排过空闲预排版的窗口钥匙
   double? _sliderPreview;
   String _sliderChapterLabel = '';
 
@@ -72,7 +74,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
   @override
   void dispose() {
-    rs.saveNow();
+    // rs.dispose() 内部会 saveNow，这里不必重复保存
     rs.dispose();
     _pageController?.dispose();
     _scrollController?.dispose();
@@ -371,6 +373,10 @@ class _ReaderPageState extends State<ReaderPage> {
       _turnCtrl = null;
     }
 
+    // 空闲时预排版前后的第 2 章（相邻章节已随当前窗口排好），
+    // 翻到下一章的那一帧就不必再同步排版新章节
+    _prewarmNeighbors(cfg, style, textWidth, textHeight);
+
     // 进度恢复 / 跳章 / 跨章滑动后的落点
     if (_restoredForChapter != rs.currentChapter ||
         _pendingCharOffset != null) {
@@ -424,6 +430,27 @@ class _ReaderPageState extends State<ReaderPage> {
         ],
       ),
     );
+  }
+
+  /// 空闲时预排版前后第 2 章，让翻章帧不必同步排版新章节。
+  /// 窗口（章节/视口尺寸/排版参数）已变化时，任务直接放弃。
+  void _prewarmNeighbors(
+      ReaderConfig cfg, TextStyle style, double width, double height) {
+    if (_prewarmedWindow == _windowKey) return;
+    _prewarmedWindow = _windowKey;
+    final chapter = rs.currentChapter;
+    final windowKey = _windowKey;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      void warm(int idx) {
+        SchedulerBinding.instance.scheduleTask(() {
+          if (!mounted || _windowKey != windowKey) return;
+          rs.layoutFor(idx, style, width, height, cfg.settings.indent);
+        }, Priority.idle);
+      }
+
+      if (chapter + 2 < rs.chapters.length) warm(chapter + 2);
+      if (chapter - 2 >= 0) warm(chapter - 2);
+    });
   }
 
   Widget _background(ReaderConfig cfg, {required bool isDark}) {
@@ -590,7 +617,6 @@ class _ReaderPageState extends State<ReaderPage> {
   Widget _scrollBody(
       ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
     final style = _style(cfg, palette);
-    final chapter = rs.chapters[rs.currentChapter];
     _scrollController ??= ScrollController();
     final sc = _scrollController!;
     if (!_scrollAttached) {
@@ -607,9 +633,17 @@ class _ReaderPageState extends State<ReaderPage> {
         }
       });
     }
-    return SingleChildScrollView(
+    // 按已分好的页懒加载：整章塞进一个 Text 会在长章节时卡顿；
+    // itemExtent 固定为页高，滚动进度换算与翻页模式完全一致，
+    // 页内文本来自 pageText，段落缩进也与翻页模式一致。
+    return ListView.builder(
       controller: sc,
-      child: Text(chapter.text, style: style),
+      itemCount: layout.pageCount,
+      itemExtent: layout.lineHeight * layout.linesPerPage,
+      itemBuilder: (ctx, page) => Align(
+        alignment: Alignment.topLeft,
+        child: Text(layout.pageText(page), style: style),
+      ),
     );
   }
 

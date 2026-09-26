@@ -48,3 +48,40 @@ String formatTimeCN(int ms) {
 
 /// 全角数字/中文数字格式化的书号。
 String chapterLabel(int index) => '第${index + 1}章';
+
+/// 下载进度节流。
+///
+/// 网络回调按 TCP 分块触发，一秒可达数千次，逐次 setState 会造成
+/// 不必要的重建风暴；只有间隔超过 [minIntervalMs] 毫秒、进度明显变化
+/// 或下载完成时才建议刷新界面。
+class ProgressThrottler {
+  final int minIntervalMs;
+  final double minFraction;
+
+  int _lastAtMs = 0;
+  int _lastReceived = -1;
+
+  ProgressThrottler({this.minIntervalMs = 100, this.minFraction = 0.005});
+
+  /// 是否应该把 (received, total) 刷到界面上。
+  bool shouldEmit(int received, int total) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final finished = total > 0 && received >= total;
+    final moved = total > 0 && (received - _lastReceived) >= total * minFraction;
+    if (_lastReceived < 0 ||
+        finished ||
+        moved ||
+        now - _lastAtMs >= minIntervalMs) {
+      _lastAtMs = now;
+      _lastReceived = received;
+      return true;
+    }
+    return false;
+  }
+
+  /// 开始新一轮下载前重置。
+  void reset() {
+    _lastAtMs = 0;
+    _lastReceived = -1;
+  }
+}

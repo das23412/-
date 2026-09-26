@@ -21,8 +21,15 @@ class LibraryState extends ChangeNotifier {
   final AppSettings settings = AppSettings.instance;
 
   List<Book> books = [];
+
+  /// 书架全部标签（随 reload 刷新，界面直接读取，避免每次重建都查库）。
+  Set<String> tags = {};
+
   bool scanning = false;
   String scanHint = '';
+
+  /// 导入副本文件名的自增序号，避免同一毫秒内的文件名碰撞覆盖。
+  int _importSeq = 0;
 
   /// 扫描发现、等待用户勾选确认的候选书籍。
   List<Book> pendingCandidates = [];
@@ -44,6 +51,7 @@ class LibraryState extends ChangeNotifier {
 
   Future<void> reload() async {
     books = await _db.allBooks();
+    tags = await _db.allTags();
     notifyListeners();
   }
 
@@ -139,15 +147,18 @@ class LibraryState extends ChangeNotifier {
     Set<String> paths, {
     bool rememberUnselected = true,
   }) async {
-    var n = 0;
+    final toInsert = <Book>[];
+    final toIgnore = <String>[];
     for (final b in pendingCandidates) {
       if (paths.contains(b.path)) {
-        final id = await _db.insertBook(b);
-        if (id > 0) n++;
+        toInsert.add(b);
       } else if (rememberUnselected) {
-        await _ignorePaths([b.path]);
+        toIgnore.add(b.path);
       }
     }
+    // 单次事务入库 + 一次性写忽略列表，避免逐本写库/写配置
+    final n = await _db.insertBooks(toInsert);
+    if (toIgnore.isNotEmpty) await _ignorePaths(toIgnore);
     pendingCandidates = [];
     await reload();
     scanHint = n > 0 ? '已导入 $n 本书' : '';
@@ -172,10 +183,15 @@ class LibraryState extends ChangeNotifier {
 
   Future<void> _ignorePaths(List<String> paths) async {
     final list = settings.ignoredScanPaths;
-    for (final p in paths) {
-      if (!list.contains(p)) list.add(p);
+    final existing = list.toSet();
+    var changed = false;
+    for (final path in paths) {
+      if (existing.add(path)) {
+        list.add(path);
+        changed = true;
+      }
     }
-    await settings.setIgnoredScanPaths(list);
+    if (changed) await settings.setIgnoredScanPaths(list);
   }
 
   Future<int> resetIgnoredPaths() async {
@@ -210,9 +226,8 @@ class LibraryState extends ChangeNotifier {
         final name = p.basename(src);
         final format = BookFormat.fromPath(name);
         if (format == BookFormat.unknown) continue;
-        final dest = p.join(
-            baseDir.path,
-            '${DateTime.now().millisecondsSinceEpoch}_${p.basename(name)}');
+        final dest = p.join(baseDir.path,
+            '${DateTime.now().millisecondsSinceEpoch}_${_importSeq++}_${p.basename(name)}');
         await srcFile.copy(dest);
         final stat = File(dest).statSync();
         final book = Book(
@@ -278,6 +293,19 @@ class LibraryState extends ChangeNotifier {
     b.pinned = !b.pinned;
     await _db.updateBook(b);
     await reload();
+  }
+
+  /// 批量置顶（只置顶其中未置顶的书），一次刷新书架。
+  Future<void> pinByIds(Set<int> ids) async {
+    var changed = false;
+    for (final b in books) {
+      if (ids.contains(b.id) && !b.pinned) {
+        b.pinned = true;
+        await _db.updateBook(b);
+        changed = true;
+      }
+    }
+    if (changed) await reload();
   }
 
   Future<void> setTags(Book b, List<String> tags) async {

@@ -189,22 +189,24 @@ class MobiParser {
 /// PalmDOC（LZ77 变体）解压。
 class PalmDoc {
   static List<int> decompress(List<int> data) {
-    final out = BytesBuilder(copy: false);
+    // 输出放进可增长列表，LZ77 回引直接按下标读取。
+    // 旧实现在回引循环里反复调用 out.toBytes()，每拷贝一个字节
+    // 都要整包复制一次缓冲区，大文件解压会退化成 O(n²)。
+    final out = <int>[];
     int i = 0;
     final n = data.length;
     while (i < n) {
       final c = data[i++];
       if (c >= 1 && c <= 8) {
         // 后跟 c 个字面量
-        final cnt = c;
-        for (int k = 0; k < cnt && i < n; k++) {
-          out.addByte(data[i++]);
+        for (int k = 0; k < c && i < n; k++) {
+          out.add(data[i++]);
         }
       } else if (c < 0x80) {
-        out.addByte(c);
+        out.add(c);
       } else if (c >= 0xC0) {
-        out.addByte(0x20);
-        out.addByte(c ^ 0x80);
+        out.add(0x20);
+        out.add(c ^ 0x80);
       } else {
         // LZ77：11 位距离，3 位长度
         if (i >= n) break;
@@ -212,12 +214,14 @@ class PalmDoc {
         final dist = (pair >> 3) & 0x7FF;
         final len = (pair & 0x7) + 3;
         final start = out.length - dist;
-        if (start < 0) break;
+        // dist 允许小于 len（重叠拷贝），边写边读保持 LZ77 语义；
+        // dist==0 是非法输入，跳过而不是越界崩溃
+        if (start < 0 || dist <= 0) break;
         for (int k = 0; k < len; k++) {
-          out.addByte(out.toBytes()[start + k]);
+          out.add(out[start + k]);
         }
       }
     }
-    return out.toBytes();
+    return Uint8List.fromList(out);
   }
 }

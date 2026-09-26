@@ -17,16 +17,19 @@ class EpubParser {
       throw const FormatException('EPUB 文件损坏，无法解压');
     }
 
+    // 文件名 → 条目 索引（原文名 + 小写兜底）。旧实现每次查找都
+    // 线性扫描全部条目，长 spine 的 EPUB 会退化成 O(条目数 × 章节数)。
+    final byName = <String, ArchiveFile>{};
+    for (final f in archive.files) {
+      byName.putIfAbsent(f.name, () => f);
+      byName.putIfAbsent(f.name.toLowerCase(), () => f);
+    }
+
     ArchiveFile? find(String path) {
       final p = path.replaceAll('\\', '/');
-      for (final f in archive.files) {
-        if (f.name == p || f.name == p.replaceFirst('/', '')) return f;
-      }
-      // 大小写不敏感兜底
-      for (final f in archive.files) {
-        if (f.name.toLowerCase() == p.toLowerCase()) return f;
-      }
-      return null;
+      return byName[p] ??
+          byName[p.replaceFirst('/', '')] ??
+          byName[p.toLowerCase()];
     }
 
     String readText(String path) {

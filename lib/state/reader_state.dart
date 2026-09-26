@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
 import '../core/book_format.dart';
-import '../core/text_utils.dart';
 import '../data/book.dart';
 import '../data/db.dart';
 import '../parser/parser.dart';
@@ -21,6 +20,9 @@ class ReaderState extends ChangeNotifier {
   List<int> chapterStartChars = [];
   int totalChars = 0;
 
+  /// 解析 isolate 中逐章累加的全书字数（见 ParsedBook.wordCount）。
+  int _parsedWordCount = 0;
+
   int currentChapter = 0;
   int currentPage = 0;
 
@@ -31,6 +33,8 @@ class ReaderState extends ChangeNotifier {
 
   final Map<int, ChapterLayout> _layouts = {};
   String _layoutKey = '';
+  double? _layoutWidth;
+  double? _layoutHeight;
 
   /// 打开书：解析文件 → 恢复进度 → 载入书签。
   Future<void> load() async {
@@ -54,6 +58,7 @@ class ReaderState extends ChangeNotifier {
         throw Exception('解析失败：${e.toString()}');
       }
       chapters = parsed.chapters;
+      _parsedWordCount = parsed.wordCount;
       // 过滤空章节
       chapters = chapters.where((c) => c.text.trim().isNotEmpty).toList();
       if (chapters.isEmpty) {
@@ -88,8 +93,7 @@ class ReaderState extends ChangeNotifier {
     if (book.chapterCount != chapters.length || book.wordCount == 0) {
       book
         ..chapterCount = chapters.length
-        ..wordCount = TextUtils.countChars(
-            chapters.map((c) => c.text).join('\n'));
+        ..wordCount = _parsedWordCount;
       await _db.updateBook(book);
     }
   }
@@ -112,6 +116,13 @@ class ReaderState extends ChangeNotifier {
     double height,
     bool indent,
   ) {
+    // 视口尺寸变化（旋转/分屏/窗口调整）时，旧尺寸排出的版式全部失效，
+    // 否则会拿到与当前屏幕不符的分页（文字溢出或留大片空白）。
+    if (_layoutWidth != width || _layoutHeight != height) {
+      _layoutWidth = width;
+      _layoutHeight = height;
+      _layouts.clear();
+    }
     return _layouts.putIfAbsent(
       chapterIdx,
       () => Paginator.layout(

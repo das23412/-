@@ -20,6 +20,18 @@ class AppDb {
     return openDatabase(
       p.join(dir, 'moyue.db'),
       version: 1,
+      // SQLite 默认不启用外键约束，必须显式打开，
+      // 否则删书后书签/章节缓存会永久残留
+      onConfigure: (db) async {
+        await db.execute('PRAGMA foreign_keys = ON');
+      },
+      // 清理旧版本（未启用外键时期）遗留的孤儿数据
+      onOpen: (db) async {
+        await db.delete('bookmarks',
+            where: 'book_id NOT IN (SELECT id FROM books)');
+        await db.delete(
+            'chapters', where: 'book_id NOT IN (SELECT id FROM books)');
+      },
       onCreate: (db, v) async {
         await db.execute('''
           CREATE TABLE books(
@@ -94,6 +106,22 @@ class AppDb {
     final db = await database;
     return db.insert('books', b.toMap(),
         conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  /// 批量插入（单事务），返回成功插入的条数。
+  /// 路径重复的记录按 [ConflictAlgorithm.ignore] 静默跳过。
+  Future<int> insertBooks(List<Book> books) async {
+    if (books.isEmpty) return 0;
+    final db = await database;
+    var n = 0;
+    await db.transaction((txn) async {
+      for (final b in books) {
+        final id = await txn.insert('books', b.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+        if (id > 0) n++;
+      }
+    });
+    return n;
   }
 
   Future<void> updateBook(Book b) async {
