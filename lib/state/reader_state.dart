@@ -254,8 +254,15 @@ class ReaderState extends ChangeNotifier {
       _layoutHeight = height;
       _layouts.clear();
     }
-    // 排版缓存上限：读完全书也不至于常驻全部分页结果
-    if (_layouts.length >= 12 && !_layouts.containsKey(chapterIdx)) {
+    // 排版缓存容量上限（命中时刷新插入顺序，淘汰近似 LRU）：
+    // 读完全书也不至于常驻全部分页结果
+    final cached = _layouts[chapterIdx];
+    if (cached != null) {
+      _layouts.remove(chapterIdx);
+      _layouts[chapterIdx] = cached;
+      return cached;
+    }
+    if (_layouts.length >= 12) {
       _layouts.remove(_layouts.keys.first);
     }
     return _layouts.putIfAbsent(

@@ -118,6 +118,37 @@ void main() {
           RuleEngine.applyReplaceRegex('第1章', r'##第(\d+)章##第$1回'), '第1回');
     });
 
+    test('## 替换串的捕获组组合语法', () {
+      // $2/$1 交换分组
+      expect(RuleEngine.applyReplaceRegex('ab', r'##(a)(b)##$2$1'), 'ba');
+      // ${N} 大括号形式（含两位数组号）
+      expect(RuleEngine.applyReplaceRegex('ab', r'##(a)(b)##${2}${1}'), 'ba');
+      // $& 整个匹配；$$ 字面量美元符
+      expect(RuleEngine.applyReplaceRegex('hello world', r'##world##[$&]'),
+          'hello [world]');
+      expect(RuleEngine.applyReplaceRegex('a-b', r'##-##$$'), 'a\$b');
+      // 越界组号为空串
+      expect(RuleEngine.applyReplaceRegex('ab', r'##(a)##$9|$1'), '|a');
+    });
+
+    test('|| 与 ## 的优先级：每个分支独立净化（不吞兜底分支）', () {
+      final d = RuleEngine.parseHtml(
+          '<p id="t">价格：100元</p><p id="t2">备用文本</p>');
+      final root = d.documentElement!;
+      // 第一个分支带 ## 净化且命中：结果不含第二个分支的规则文本
+      expect(
+        RuleEngine.evalString(
+            '@css:#t@text##：.*##（已改）||@css:#t2@text', root: root),
+        '价格（已改）',
+      );
+      // 第一个分支选择器未命中：落到第二个分支，且第二分支自己的 ## 生效
+      expect(
+        RuleEngine.evalString(
+            '@css:#missing@text||@css:#t2@text##备用##替换', root: root),
+        '替换文本',
+      );
+    });
+
     test('净化作用于规则结果', () {
       final d = RuleEngine.parseHtml('<p>标题（广告）</p>');
       expect(

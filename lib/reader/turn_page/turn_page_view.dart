@@ -130,10 +130,9 @@ class _TurnPageViewState extends State<TurnPageView>
   }
 
   @override
-  @override
   void dispose() {
-    super.dispose();
     widget.controller.dispose();
+    super.dispose();
   }
 
   @override

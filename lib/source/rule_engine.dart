@@ -162,10 +162,17 @@ class RuleEngine {
           }
           break;
         default:
-          final idx = int.tryParse(next);
+          // 扫出完整的数字串（支持 $12 这类两位以上组号）
+          int j = i + 1;
+          while (j < replace.length) {
+            final cu = replace.codeUnitAt(j);
+            if (cu < 0x30 || cu > 0x39) break;
+            j++;
+          }
+          final idx = int.tryParse(replace.substring(i + 1, j));
           if (idx != null) {
             buf.write(_groupOf(m, idx));
-            i++;
+            i = j - 1;
           } else {
             buf.write(c);
           }

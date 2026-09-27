@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# 发布签名（密钥与口令绝不入库，兜底规则；android/.gitignore 已有同名规则）
+key.properties
+**/*.keystore
+**/*.jks

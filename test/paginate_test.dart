@@ -78,4 +78,39 @@ void main() {
     );
     expect(empty.pageCount, 1);
   });
+
+  test('超长段落分块：字符偏移无损、可分页、可往返', () {
+    // 1.5 万字无换行的单个段落，必然触发分块排版（块长 8000）
+    final text = List.generate(1500, (i) => '这是第$i句话，讲述一段情节发展。').join();
+    expect(text.length, greaterThan(8000));
+    final layout = Paginator.layout(
+      chapterText: text,
+      style: style,
+      viewportWidth: viewportWidth,
+      viewportHeight: viewportHeight,
+      indent: false,
+    );
+    expect(layout.pageCount, greaterThan(1));
+    // 所有行的 [start, end) 必须连续覆盖整段文本：分块不得丢字/重叠
+    int expectStart = 0;
+    for (final line in layout.lines) {
+      expect(line.start, expectStart);
+      expect(line.end, greaterThanOrEqualTo(line.start));
+      expectStart = line.end;
+    }
+    expect(expectStart, text.length);
+    // 字符偏移 → 行 → 页 往返一致
+    expect(
+      layout.pageOfLine(layout.lineIndexOfChar(text.length - 1)),
+      layout.pageCount - 1,
+    );
+    // 抽查任意偏移都能映射回含该字符的行
+    for (final probe in [0, 4000, 8000, 12000, text.length - 1]) {
+      final line = layout.lineIndexOfChar(probe);
+      final start = layout.charOffsetOfLine(line);
+      expect(start, lessThanOrEqualTo(probe));
+    }
+    // 首页文本来自原文开头
+    expect(layout.pageText(0), startsWith('这是第0句话'));
+  });
 }

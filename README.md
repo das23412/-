@@ -79,8 +79,9 @@
   （书架/进度清空）；此后所有版本恢复覆盖安装
 
 本地 `flutter run` 调试不受影响（debug 构建自动使用本机 debug 密钥）；
-本地 `flutter build apk --release` 需要手工放置 `android/key.properties`
-（含 storeFile/storePassword/keyAlias/keyPassword 四项）。
+本地 `flutter build apk --release` 需要先手工放置 `android/key.properties`
+（storeFile / storePassword / keyAlias / keyPassword 四项，密钥库为 PKCS12），
+缺失时会在打包阶段明确报错提醒，不影响其他构建任务。
 
 ## 四、日常使用
 
@@ -102,7 +103,7 @@
 
 ```bash
 flutter analyze   # 静态检查，当前 0 问题
-flutter test      # 单元测试，当前 80+ 个用例全通过
+flutter test      # 单元测试全部通过（用例清单见 test/ 目录）
 ```
 
 ## 六、iOS 版
@@ -134,7 +135,7 @@ moyue/
 │   └── main.dart      # 入口
 ├── android/           # 安卓工程（权限最小化 + VIEW intent 接收）
 ├── ios/               # iOS 工程（代码兼容，暂不打包）
-├── test/              # 80+ 个单元测试
+├── test/              # 单元测试（解析器 / 分页 / 书源引擎 / 服务）
 ├── analysis_options.yaml  # 静态检查规则
 └── .github/workflows/ # GitHub Actions 云端打包
 ```

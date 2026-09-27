@@ -49,15 +49,26 @@ android {
 
     buildTypes {
         release {
-            if (!keystorePropertiesFile.exists()) {
-                // 拒绝用随机/公共签名出正式包：装上去的包要么无法覆盖安装，
-                // 要么任何人都能伪造同签名更新
-                throw GradleException(
-                    "缺少 android/key.properties：正式构建必须配置发布签名" +
-                        "（GitHub Secrets 注入或本地手工放置，见 docs/发布检查清单.md）"
-                )
+            // 未配置签名时不设置 signingConfig（本地会得到未签名、不可安装的 APK）。
+            // 注意：这里不能 throw——buildTypes 是配置阶段代码，会对包括
+            // flutter run（debug）在内的一切任务无条件求值。
+            // 真正的校验放在任务执行期（见下方 tasks.matching 的 doFirst）。
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
             }
-            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+}
+
+// 只在实际执行 release 打包任务时校验签名配置，
+// 避免配置阶段的全局检查挡住 debug 构建 / flutter run / 其他 gradle 任务。
+tasks.matching { it.name == "packageRelease" || it.name == "assembleRelease" }.configureEach {
+    doFirst {
+        if (!keystorePropertiesFile.exists()) {
+            throw GradleException(
+                "缺少 android/key.properties：正式构建必须配置发布签名" +
+                    "（GitHub Secrets 注入或本地手工放置，见 docs/发布检查清单.md）"
+            )
         }
     }
 }
