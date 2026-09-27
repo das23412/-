@@ -50,6 +50,7 @@ class _ReaderPageState extends State<ReaderPage> {
   String _prewarmedWindow = ''; // 已安排过空闲预排版的窗口钥匙
   double? _sliderPreview;
   String _sliderChapterLabel = '';
+  int? _sliderChapter; // 在线书进度条拖动时的章号预览（1 基）
 
   @override
   void initState() {
@@ -92,6 +93,7 @@ class _ReaderPageState extends State<ReaderPage> {
       _menuVisible = !_menuVisible;
       _sliderChapterLabel = '';
       _sliderPreview = null;
+      _sliderChapter = null;
     });
     SystemChrome.setEnabledSystemUIMode(
       _menuVisible ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky,
@@ -275,6 +277,13 @@ class _ReaderPageState extends State<ReaderPage> {
                 LayoutBuilder(
                   builder: (ctx, box) => _content(ctx, box, cfg, palette),
                 ),
+              if (rs.chapterLoading)
+                const Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
               if (_menuVisible) _menuOverlay(cfg, palette, isDark),
             ],
           ),
@@ -432,8 +441,8 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
-  /// 空闲时预排版前后第 2 章，让翻章帧不必同步排版新章节。
-  /// 窗口（章节/视口尺寸/排版参数）已变化时，任务直接放弃。
+  /// 空闲时预热前后第 2 章：本地书预排版，在线书预取正文，
+  /// 让翻章帧不必同步做重活。窗口（章节/尺寸/参数）已变化时任务放弃。
   void _prewarmNeighbors(
       ReaderConfig cfg, TextStyle style, double width, double height) {
     if (_prewarmedWindow == _windowKey) return;
@@ -444,6 +453,10 @@ class _ReaderPageState extends State<ReaderPage> {
       void warm(int idx) {
         SchedulerBinding.instance.scheduleTask(() {
           if (!mounted || _windowKey != windowKey) return;
+          if (rs.isOnlineBook) {
+            rs.preloadChapter(idx);
+            return;
+          }
           rs.layoutFor(idx, style, width, height, cfg.settings.indent);
         }, Priority.idle);
       }
@@ -649,9 +662,47 @@ class _ReaderPageState extends State<ReaderPage> {
 
   // ---------- 菜单 ----------
 
+  /// 在线书进度条：按章节跳转（未加载的章节没有字符偏移信息）。
+  Widget _onlineSlider() {
+    final max = math.max(1.0, rs.chapters.length.toDouble());
+    return Slider(
+      value: (_menuDragging && _sliderChapter != null
+              ? _sliderChapter!.toDouble()
+              : (rs.currentChapter + 1).toDouble())
+          .clamp(1.0, max),
+      max: max,
+      divisions: rs.chapters.length > 1 ? rs.chapters.length : null,
+      onChangeStart: (v) {
+        _menuDragging = true;
+        _sliderChapter = v.round();
+        _sliderChapterLabel = _onlineChapterLabel(v.round());
+      },
+      onChanged: (v) {
+        setState(() {
+          _sliderChapter = v.round();
+          _sliderChapterLabel = _onlineChapterLabel(v.round());
+        });
+      },
+      onChangeEnd: (v) {
+        _menuDragging = false;
+        _sliderChapter = null;
+        _sliderChapterLabel = '';
+        _goChapter(v.round() - 1);
+      },
+    );
+  }
+
+  String _onlineChapterLabel(int chapter1based) {
+    if (rs.chapters.isEmpty) return '';
+    final idx = (chapter1based - 1).clamp(0, rs.chapters.length - 1);
+    final title = rs.chapters[idx].title;
+    final short = title.length > 10 ? '${title.substring(0, 10)}…' : title;
+    final pct = (idx + 1) / rs.chapters.length * 100;
+    return '第$chapter1based章 $short（${pct.toStringAsFixed(0)}%）';
+  }
+
   /// 拖动进度条时的实时章节提示。
-  String _chapterLabelFor(int charOffset) {
-    if (rs.chapterStartChars.isEmpty || rs.totalChars == 0) return '';
+  String _chapterLabelFor(int charOffset) {    if (rs.chapterStartChars.isEmpty || rs.totalChars == 0) return '';
     int idx = 0;
     for (int i = 0; i < rs.chapterStartChars.length; i++) {
       if (rs.chapterStartChars[i] <= charOffset) idx = i;
@@ -747,28 +798,32 @@ class _ReaderPageState extends State<ReaderPage> {
                         Text('${rs.percent.toStringAsFixed(1)}%',
                             style: const TextStyle(fontSize: 12)),
                         Expanded(
-                          child: Slider(
-                            value: (_menuDragging && _sliderPreview != null
-                                    ? _sliderPreview!
-                                    : done.clamp(0, total).toDouble())
-                                .clamp(0.0, total.toDouble()),
-                            max: total.toDouble(),
-                            onChangeStart: (v) {
-                              _menuDragging = true;
-                              _sliderPreview = v;
-                              _sliderChapterLabel = _chapterLabelFor(v.round());
-                            },
-                            onChangeEnd: (v) {
-                              _menuDragging = false;
-                              _sliderPreview = null;
-                              _sliderChapterLabel = '';
-                              _jumpToGlobalOffset(v.round());
-                            },
-                            onChanged: (v) => setState(() {
-                              _sliderPreview = v;
-                              _sliderChapterLabel = _chapterLabelFor(v.round());
-                            }),
-                          ),
+                          child: rs.isOnlineBook
+                              ? _onlineSlider()
+                              : Slider(
+                                  value: (_menuDragging && _sliderPreview != null
+                                          ? _sliderPreview!
+                                          : done.clamp(0, total).toDouble())
+                                      .clamp(0.0, total.toDouble()),
+                                  max: total.toDouble(),
+                                  onChangeStart: (v) {
+                                    _menuDragging = true;
+                                    _sliderPreview = v;
+                                    _sliderChapterLabel =
+                                        _chapterLabelFor(v.round());
+                                  },
+                                  onChangeEnd: (v) {
+                                    _menuDragging = false;
+                                    _sliderPreview = null;
+                                    _sliderChapterLabel = '';
+                                    _jumpToGlobalOffset(v.round());
+                                  },
+                                  onChanged: (v) => setState(() {
+                                    _sliderPreview = v;
+                                    _sliderChapterLabel =
+                                        _chapterLabelFor(v.round());
+                                  }),
+                                ),
                         ),
                         Text('第${rs.currentChapter + 1}/${rs.chapters.length}章',
                             style: const TextStyle(fontSize: 12)),

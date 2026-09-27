@@ -13,6 +13,7 @@ import 'folders_page.dart';
 import 'general_settings_page.dart';
 import 'link_import_page.dart';
 import 'reader_page.dart';
+import 'source_search_page.dart';
 
 /// 书架主页。
 class BookshelfPage extends StatefulWidget {
@@ -265,6 +266,16 @@ class _BookshelfPageState extends State<BookshelfPage> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.cloud_search_outlined),
+              title: const Text('从书源搜索在线书籍'),
+              subtitle: const Text('按导入的书源搜索，在线阅读（需打开书源联网）'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const SourceSearchPage()));
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.folder_outlined),
               title: const Text('管理扫描文件夹'),
               onTap: () {
@@ -314,10 +325,12 @@ class _BookshelfPageState extends State<BookshelfPage> {
             SizedBox(height: 10),
             Text(
               '· 书籍文件、阅读进度、书签全部保存在本机\n'
-              '· 不提供任何内容资源，没有内置书源或站点\n'
-              '· 联网仅用于「从链接导入」：默认关闭，打开后也只在你主动下载时访问你粘贴的链接\n'
+              '· 不提供任何内容资源，没有内置书源或站点，书源由你自行导入\n'
+              '· 联网仅两类，均有独立开关且默认关闭：\n'
+              '   1)「从链接导入」— 只访问你粘贴的文件直链\n'
+              '   2)「书源搜索」— 按你导入的书源请求搜索/目录/正文\n'
               '· 绝无后台请求，绝不上传任何数据\n'
-              '· 分享链接由用户自行获取，请支持正版',
+              '· 书源内容来自第三方站点，请支持正版',
               style: TextStyle(fontSize: 13.5, height: 1.6),
             ),
           ],
@@ -749,6 +762,19 @@ class _BookshelfPageState extends State<BookshelfPage> {
                           style: TextStyle(color: Colors.white, fontSize: 9)),
                     ),
                   ),
+                if (book.isOnline)
+                  Positioned(
+                    top: 6, left: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.deepPurple.shade500,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text('在线',
+                          style: TextStyle(color: Colors.white, fontSize: 9)),
+                    ),
+                  ),
                 if (book.pinned)
                   const Positioned(
                     bottom: 6, right: 6,
@@ -824,6 +850,8 @@ class _BookshelfPageState extends State<BookshelfPage> {
         return [Colors.purple.shade300, Colors.purple.shade700];
       case BookFormat.html:
         return [Colors.blueGrey.shade300, Colors.blueGrey.shade700];
+      case BookFormat.online:
+        return [Colors.deepPurple.shade300, Colors.deepPurple.shade700];
       case BookFormat.unknown:
         return [Colors.grey.shade400, Colors.grey.shade700];
     }

@@ -54,6 +54,8 @@ class BookParser {
         return HtmlParser.parse(file);
       case BookFormat.unknown:
         throw const FormatException('不支持的文件格式');
+      case BookFormat.online:
+        throw const FormatException('在线书籍不支持本地文件解析');
     }
   }
 }

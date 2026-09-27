@@ -5,7 +5,8 @@ enum BookFormat {
   mobi, // 含 .mobi / .azw / .azw3
   fb2,
   html,
-  unknown;
+  unknown,
+  online; // 在线书（书源下载，无本地文件）
 
   static BookFormat fromPath(String path) {
     final lower = path.toLowerCase();
@@ -38,6 +39,8 @@ enum BookFormat {
         return 'HTML';
       case BookFormat.unknown:
         return '未知';
+      case BookFormat.online:
+        return '在线';
     }
   }
 

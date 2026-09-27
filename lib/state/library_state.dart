@@ -7,10 +7,13 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../core/book_format.dart';
 import '../core/text_utils.dart';
-import '../data/book.dart';
+// book.dart 里也定义了枚举 BookSource（书籍来源），与书源类重名，隐藏之
+import '../data/book.dart' hide BookSource;
 import '../data/db.dart';
 import '../data/settings.dart';
 import '../services/scan_service.dart';
+import '../source/book_source.dart';
+import '../source/source_service.dart';
 
 /// 书架排序方式。
 enum SortMode { lastRead, addedTime, title }
@@ -202,11 +205,13 @@ class LibraryState extends ChangeNotifier {
 
   int get ignoredCount => settings.ignoredScanPaths.length;
 
-  /// 清理已失效的引用（原文件被删除的书）。
+  /// 清理已失效的引用（原文件被删除的书）。在线书没有本地文件，跳过。
   Future<int> cleanMissing() async {
     final missing = <String>[];
     for (final b in books) {
-      if (!b.imported && !File(b.path).existsSync()) missing.add(b.path);
+      if (!b.isOnline && !b.imported && !File(b.path).existsSync()) {
+        missing.add(b.path);
+      }
     }
     await _db.removeBooksByPaths(missing);
     await reload();
@@ -255,6 +260,42 @@ class LibraryState extends ChangeNotifier {
 
   /// 应用私有导入目录（也是链接下载的目标目录）。
   Future<Directory> importDirectory() => _importDir();
+
+  /// 把搜索到的在线书加入书架；已存在时直接返回现有记录。
+  /// 返回 null 表示入库失败。
+  Future<Book?> addOnlineBook(SourceBook hint) async {
+    final path = Book.onlinePath(hint.sourceId, hint.bookUrl);
+    final existing = await _db.bookByPath(path);
+    if (existing != null) return existing;
+    var name = hint.name;
+    var author = hint.author;
+    var coverUrl = hint.coverUrl;
+    final source = await BookSource.findById(hint.sourceId);
+    if (source != null) {
+      try {
+        // 详情页失败不致命：直接用搜索结果字段
+        final info = await SourceService.bookInfo(source, hint);
+        name = info.book.name;
+        author = info.book.author;
+        coverUrl = info.book.coverUrl;
+      } catch (_) {}
+    }
+    final book = Book(
+      path: path,
+      title: name,
+      format: BookFormat.online,
+      sizeBytes: 0,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+      author: author,
+      coverUrl: coverUrl,
+      isOnline: true,
+      sourceId: hint.sourceId,
+      bookUrl: hint.bookUrl,
+    );
+    await _db.insertBook(book);
+    await reload();
+    return _db.bookByPath(path);
+  }
 
   /// 把已下载到应用目录的文件登记进书架（链接导入用）。
   Future<Book> registerDownloadedFile(String path) async {

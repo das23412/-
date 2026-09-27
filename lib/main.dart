@@ -8,6 +8,7 @@ import 'data/settings.dart';
 import 'platform/intent_channel.dart';
 import 'state/library_state.dart';
 import 'state/reader_config.dart';
+import 'state/source_state.dart';
 import 'state/theme_state.dart';
 import 'ui/bookshelf_page.dart';
 import 'ui/reader_page.dart';
@@ -30,6 +31,7 @@ class MoyueApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ThemeState()),
         ChangeNotifierProvider(create: (_) => LibraryState()),
         ChangeNotifierProvider(create: (_) => ReaderConfig()),
+        ChangeNotifierProvider(create: (_) => SourceState()),
       ],
       child: Consumer<ThemeState>(
         builder: (ctx, theme, _) => MaterialApp(

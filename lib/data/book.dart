@@ -53,6 +53,10 @@ class Book {
     this.bookUrl = '',
   });
 
+  /// 在线书在数据库中的唯一路径（books.path 要求 UNIQUE 且 NOT NULL）。
+  static String onlinePath(String sourceId, String bookUrl) =>
+      'online://$sourceId$bookUrl';
+
   /// 标签列表。
   List<String> get tagList =>
       tags.isEmpty ? const [] : tags.split(',').where((t) => t.isNotEmpty).toList();

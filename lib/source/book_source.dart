@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../data/db.dart';
+
 /// 空值转空字符串的通用工具（库内共用）。
 String _s(Object? v) => v == null ? '' : v.toString().trim();
 
@@ -158,6 +160,20 @@ class BookSource {
 
   static Map<String, dynamic> _map(Object? v) =>
       v is Map<String, dynamic> ? v : const {};
+
+  /// 按库中保存的原始 JSON 找回书源；不存在或损坏返回 null。
+  static Future<BookSource?> findById(String id) async {
+    final rows = await AppDb.instance.allSourceRows();
+    for (final r in rows) {
+      if (r['id'] == id) {
+        try {
+          final decoded = jsonDecode(r['raw'] as String? ?? '');
+          if (decoded is Map<String, dynamic>) return fromLegadoJson(decoded);
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
 
   /// Legado 的 header 字段是 JSON 字符串，如 '{"User-Agent":"xxx"}'。
   static Map<String, String> _parseHeader(String header) {
