@@ -127,8 +127,8 @@ void main() {
       expect(RuleEngine.applyReplaceRegex('hello world', r'##world##[$&]'),
           'hello [world]');
       expect(RuleEngine.applyReplaceRegex('a-b', r'##-##$$'), 'a\$b');
-      // 越界组号为空串
-      expect(RuleEngine.applyReplaceRegex('ab', r'##(a)##$9|$1'), '|a');
+      // 越界组号为空串（未匹配的尾部字符保留）
+      expect(RuleEngine.applyReplaceRegex('ab', r'##(a)##$9|$1'), '|ab');
     });
 
     test('|| 与 ## 的优先级：每个分支独立净化（不吞兜底分支）', () {
