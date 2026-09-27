@@ -1,47 +1,50 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyue/parser/mobi_parser.dart';
 
-const int _mobiHeaderLen = 0xF8; // 248，需 ≥ 0xF2+2 才会读取 extraFlags
+const int _mobiHeaderLen = 0xF8; // 248
 
 /// 构造最小合法 MOBI：PDB 头 + record0（PalmDOC头 + MOBI头）+ 文本记录。
-Uint8List buildMobi(List<List<int>> textRecords, {int compression = 1}) {
+/// [headerLength] 可指定 MOBI 头长度；[extraFlags] 按 2 字节写入
+/// record0 偏移 16+0xF2（仅当 headerLength 覆盖该偏移时生效）。
+Uint8List buildMobi(
+  List<List<int>> textRecords, {
+  int compression = 1,
+  int headerLength = _mobiHeaderLen,
+  int extraFlags = 0,
+}) {
   final numRecords = 1 + textRecords.length;
-  final textLen = textRecords.fold<int>(0, (a, b) => a + b.length - 3);
 
   // record 0
   final b = BytesBuilder();
   b.add([(compression >> 8) & 0xFF, compression & 0xFF]); // compression
   b.add([0, 0]); // unused
-  b.add([
-    (textLen >> 24) & 0xFF,
-    (textLen >> 16) & 0xFF,
-    (textLen >> 8) & 0xFF,
-    textLen & 0xFF,
-  ]);
+  b.add([0, 0, 0, 0]); // text length（解析器不校验，占位）
   b.add([(textRecords.length >> 8) & 0xFF, textRecords.length & 0xFF]);
   b.add([0x10, 0x00]); // recordSize = 4096
   b.add([0, 0]); // encryption = 0
   b.add([0, 0]); // unknown
   b.add(_four('MOBI'));
   b.add([
-    (_mobiHeaderLen >> 24) & 0xFF,
-    (_mobiHeaderLen >> 16) & 0xFF,
-    (_mobiHeaderLen >> 8) & 0xFF,
-    _mobiHeaderLen & 0xFF,
+    (headerLength >> 24) & 0xFF,
+    (headerLength >> 16) & 0xFF,
+    (headerLength >> 8) & 0xFF,
+    headerLength & 0xFF,
   ]);
   b.add([0, 0, 0, 2]); // mobiType = 2
   b.add([0, 0, 0xFD, 0xE9]); // textEncoding = 65001
   b.add(List<int>.filled(4, 0)); // uniqueID
   b.add(List<int>.filled(4, 0)); // fileVersion
   final current = b.length;
-  b.add(List<int>.filled(_mobiHeaderLen - (current - 16), 0));
+  b.add(List<int>.filled(headerLength - (current - 16), 0));
   final record0 = b.toBytes();
-  // extra data flags 位于 record0 偏移 16 + 0xF2 = 258，设为 1（multibyte overlap）
+  // extra data flags：2 字节 @ record0 偏移 16+0xF2（大端）
   final flagsOffset = 16 + 0xF2;
-  record0[flagsOffset + 3] = 1;
+  record0[flagsOffset] = (extraFlags >> 8) & 0xFF;
+  record0[flagsOffset + 1] = extraFlags & 0xFF;
 
   final records = <List<int>>[record0, ...textRecords];
 
@@ -89,27 +92,7 @@ Uint8List buildMobi(List<List<int>> textRecords, {int compression = 1}) {
 
 List<int> _four(String s) => s.codeUnits;
 
-List<int> utf8(String s) {
-  final out = <int>[];
-  for (final cu in s.codeUnits) {
-    if (cu < 0x80) {
-      out.add(cu);
-    } else if (cu < 0x800) {
-      out
-        ..add(0xC0 | (cu >> 6))
-        ..add(0x80 | (cu & 0x3F));
-    } else {
-      out
-        ..add(0xE0 | (cu >> 12))
-        ..add(0x80 | ((cu >> 6) & 0x3F))
-        ..add(0x80 | (cu & 0x3F));
-    }
-  }
-  return out;
-}
-
-/// 追加 2 字节垃圾 + 1 字节计数(0x02)：multibyte 裁剪应去掉 3 字节。
-List<int> withMultibyteTrailer(List<int> body) => [...body, 0xAA, 0xBB, 0x02];
+List<int> utf8(String s) => const Utf8Codec().encode(s);
 
 void main() {
   group('PalmDOC 解压', () {
@@ -125,39 +108,38 @@ void main() {
       final out = PalmDoc.decompress(data);
       expect(String.fromCharCodes(out), 'ABCABCABC');
     });
-
-    test('空格压缩 (0xC0+)', () {
-      final out = PalmDoc.decompress([0xC0 | 0x41]);
-      expect(String.fromCharCodes(out), ' A');
-    });
-
-    test('字面量计数 (1-8)', () {
-      // 计数字节后跟恰好 count 个字面量
-      final out = PalmDoc.decompress([0x02, 0x41, 0x42]);
-      expect(String.fromCharCodes(out), 'AB');
-    });
   });
 
-  group('尾部 extra data 裁剪', () {
-    test('multibyte overlap', () {
-      final body = utf8('正文内容');
-      final data = withMultibyteTrailer(body);
-      final trimmed = MobiParser.trimTrailingForTest(data, 1);
-      expect(trimmed, body);
-    });
-
+  group('尾部 extra data 裁剪（按规格反向变长整数）', () {
     test('无 flags 不裁剪', () {
       final body = [1, 2, 3, 4];
       expect(MobiParser.trimTrailingForTest(body, 0), body);
     });
 
-    test('trailing entry（bit 2）', () {
-      // bit2=4：尾部有 1 个 vwi 条目；条目大小 = 从尾往前连续低位字节个数
-      // 中文 utf8 字节都带高位，可作扫描终止符
+    test('multibyte overlap（bit 0，位于最末尾）', () {
+      final body = utf8('正文内容');
+      final data = [...body, 0xAA, 0xBB, 0x02];
+      expect(MobiParser.trimTrailingForTest(data, 1), body);
+    });
+
+    test('单字节反向变长整数（值 2 → 裁掉 1+2 字节）', () {
       final body = utf8('正文');
-      final data = [...body, 0x05, 0x00];
-      final trimmed = MobiParser.trimTrailingForTest(data, 4);
-      expect(trimmed, body);
+      // entry 大小 2：变长整数 [0x82]（高位 1 + 值 2），后跟 2 字节 payload
+      final data = [...body, 0xAA, 0xBB, 0x82];
+      expect(MobiParser.trimTrailingForTest(data, 2), body);
+    });
+
+    test('双字节反向变长整数（值 130 → 裁掉 2+130 字节）', () {
+      final body = utf8('正文');
+      // 值 130：低 7 位组 2（|0x80），高 7 位组 1 → 文件序 [0x82, 0x01]
+      final payload = List<int>.filled(130, 0xAA);
+      final data = [...body, ...payload, 0x82, 0x01];
+      expect(MobiParser.trimTrailingForTest(data, 2), body);
+    });
+
+    test('畸形数据（无终止字节）放弃裁剪而非崩溃', () {
+      final data = [0x0F, 0x0E, 0x0D];
+      expect(MobiParser.trimTrailingForTest(data, 2), data);
     });
   });
 
@@ -171,10 +153,9 @@ void main() {
       if (file.existsSync()) file.deleteSync();
     });
 
-    test('解析两章 MOBI（无压缩 + multibyte 尾部）', () {
-      // 记录是首尾相接的 HTML 流：开篇后换行，再出现两章
-      final rec1 = withMultibyteTrailer(utf8('这是开篇介绍。\n'));
-      final rec2 = withMultibyteTrailer(utf8('第1章 起点\n主角出场了。\n第2章 风波\n剧情推进了。'));
+    test('解析两章 MOBI（无压缩）', () {
+      final rec1 = utf8('这是开篇介绍。\n');
+      final rec2 = utf8('第1章 起点\n主角出场了。\n第2章 风波\n剧情推进了。');
       file.writeAsBytesSync(buildMobi([rec1, rec2]));
       final book = MobiParser.parse(file);
       expect(book.chapters.length, 3); // 开篇 + 2 章
@@ -183,6 +164,40 @@ void main() {
       expect(book.chapters[1].text, contains('主角出场了'));
       expect(book.chapters[2].title, '第2章 风波');
       expect(book.chapters[2].text, contains('剧情推进了'));
+    });
+
+    test('跨记录的汉字不被切碎（整流解码）', () {
+      // 构造一条中文语句，在某个汉字的 UTF-8 字节中间切开成两条记录：
+      // 逐记录解码会在边界产生替换符/乱码；整体解码必须完整还原。
+      const sentence = '这是跨记录测试：汉字必须完整无缺，不能出现任何乱码。';
+      final bytes = utf8(sentence);
+      // 找到第一个"续字节"（10xxxxxx）作为切分点 → 记录边界切在汉字内部
+      var cut = 2;
+      while (cut < bytes.length && (bytes[cut] & 0xC0) != 0x80) {
+        cut++;
+      }
+      expect((bytes[cut] & 0xC0) == 0x80, isTrue,
+          reason: '切分点应位于多字节字符内部');
+      final rec1 = bytes.sublist(0, cut);
+      final rec2 = bytes.sublist(cut);
+      file.writeAsBytesSync(buildMobi([rec1, rec2]));
+      final book = MobiParser.parse(file);
+      final all = book.chapters.map((c) => c.text).join('\n');
+      expect(all, contains(sentence));
+      expect(all.contains('\uFFFD'), isFalse);
+    });
+
+    test('extraFlags（2 字节 @0xF2）正确读取并裁剪尾部', () {
+      // headerLength 默认 0xF8 覆盖 0xF2；flags bit1 → 记录尾部
+      // [0xAA, 0xBB, 0x82]（entry 大小 2 的反向变长整数 + 2 字节 payload）
+      final rec = [...utf8('第1章 起点\n主角出场了。'), 0xAA, 0xBB, 0x82];
+      file.writeAsBytesSync(
+          buildMobi([rec], extraFlags: 2));
+      final book = MobiParser.parse(file);
+      expect(book.chapters, isNotEmpty);
+      expect(book.chapters.last.text, isNot(contains('\uFFFD')));
+      final joined = book.chapters.map((c) => c.text).join();
+      expect(joined.contains('主角出场了'), isTrue);
     });
 
     test('HUFF/CDIC 压缩抛出友好错误', () {

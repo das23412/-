@@ -116,7 +116,14 @@ class Paginator {
           break;
         }
       }
-      if (cut <= start) cut = start + _maxSegmentLength; // 找不到标点则硬切
+      if (cut <= start) {
+        cut = start + _maxSegmentLength;
+        // 不把代理对（emoji 等）从中间切开
+        if (cut < text.length) {
+          final cu = text.codeUnitAt(cut - 1);
+          if (cu >= 0xD800 && cu <= 0xDBFF) cut--;
+        }
+      } // 找不到标点则硬切
       segs.add((start, cut));
       start = cut;
     }
@@ -150,7 +157,9 @@ class Paginator {
     );
 
     final lines = <LineInfo>[];
-    double lineHeight = (style.fontSize ?? 16) * (style.height ?? 1.6);
+    // 行高下限防御：lineHeight<=0 会让分页/进度换算出现除零与 NaN
+    double lineHeight = math.max(
+        1.0, (style.fontSize ?? 16) * (style.height ?? 1.6));
     int linesPerPage = math.max(1, (viewportHeight / lineHeight).floor());
 
     for (int p = 0; p < paragraphTexts.length; p++) {

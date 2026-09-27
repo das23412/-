@@ -41,8 +41,9 @@ android {
 
     defaultConfig {
         applicationId = "com.moyue.reader"
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // 显式固定，不随 Flutter/SDK 升级漂移
+        minSdk = 24
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

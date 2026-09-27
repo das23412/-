@@ -19,7 +19,6 @@ enum _UpdateState { idle, checking, none, available, downloading, done }
 
 class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
   final _progressThrottler = ProgressThrottler();
-  bool _allowNetwork = false;
   _UpdateState _updateState = _UpdateState.idle;
   UpdateInfo? _update;
   String? _error;
@@ -27,15 +26,9 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
   int _total = -1;
   String? _apkPath;
 
-  @override
-  void initState() {
-    super.initState();
-    _allowNetwork = AppSettings.instance.allowNetworkDownload;
-  }
-
   Future<void> _toggleNetwork(bool v) async {
-    setState(() => _allowNetwork = v);
     AppSettings.instance.allowNetworkDownload = v;
+    setState(() {});
   }
 
   Future<void> _checkUpdate() async {
@@ -134,10 +127,11 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
           // 联网
           Card(
             child: SwitchListTile(
-              value: _allowNetwork,
+              value: AppSettings.instance.allowNetworkDownload,
               onChanged: (v) => _toggleNetwork(v),
               title: const Text('允许联网下载'),
-              subtitle: const Text('用于「从链接导入」。默认关闭，关闭时应用不发起任何网络请求。'),
+              subtitle: const Text('用于「从链接导入」。默认关闭；'
+              '应用内「检查更新」是你主动操作，不受此开关限制。'),
             ),
           ),
           const SizedBox(height: 16),
@@ -199,7 +193,8 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
                         Text('正在检查更新…'),
                       ],
                     ),
-                  if (_updateState == _UpdateState.idle && _error != null)
+                  if ((_updateState == _UpdateState.idle || _updateState == _UpdateState.available) &&
+                      _error != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(_error!,

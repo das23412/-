@@ -3,11 +3,13 @@ package com.moyue.reader
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * MainActivity：负责接收“用墨阅打开”的 VIEW intent，以及拉起应用内更新的安装器。
@@ -18,6 +20,7 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private val channelName = "moyue/intent"
     private val installerChannelName = "moyue/installer"
+    private val ioExecutor = Executors.newSingleThreadExecutor()
     private var pendingPath: String? = null
     private var channel: MethodChannel? = null
 
@@ -26,7 +29,12 @@ class MainActivity : FlutterActivity() {
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "initialFilePath" -> result.success(pendingPath)
+                "initialFilePath" -> {
+                    // 取走即清：Activity 重建不会重复导入同一路径
+                    val p = pendingPath
+                    pendingPath = null
+                    result.success(p)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -42,6 +50,7 @@ class MainActivity : FlutterActivity() {
                                 installApk(path)
                                 result.success(true)
                             } catch (e: Exception) {
+                                Log.e(TAG, "installApk 失败", e)
                                 result.error("install_failed", e.message, null)
                             }
                         }
@@ -74,9 +83,18 @@ class MainActivity : FlutterActivity() {
     private fun handleIntent(intent: Intent?) {
         if (intent == null || intent.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
-        val path = copyUriToCache(uri) ?: return
-        pendingPath = path
-        channel?.invokeMethod("onNewFilePath", path)
+        // 大文件拷贝在后台线程执行：主线程 IO 会阻塞引擎启动乃至 ANR
+        ioExecutor.execute {
+            val path = copyUriToCache(uri)
+            runOnUiThread {
+                if (path == null) {
+                    Log.e(TAG, "导入失败：无法拷贝 $uri（磁盘满、文件不可读或无权限）")
+                    return@runOnUiThread
+                }
+                pendingPath = path
+                channel?.invokeMethod("onNewFilePath", path)
+            }
+        }
     }
 
     private fun copyUriToCache(uri: Uri): String? {
@@ -93,6 +111,7 @@ class MainActivity : FlutterActivity() {
             } ?: return null
             dest.absolutePath
         } catch (e: Exception) {
+            Log.e(TAG, "copyUriToCache 失败", e)
             null
         }
     }
@@ -105,7 +124,12 @@ class MainActivity : FlutterActivity() {
                 if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
             }
         } catch (e: Exception) {
+            Log.e(TAG, "queryDisplayName 失败", e)
             null
         }
+    }
+
+    companion object {
+        private const val TAG = "MoyueMainActivity"
     }
 }

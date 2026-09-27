@@ -12,6 +12,8 @@ class InstallChannel {
       return null;
     } on PlatformException catch (e) {
       return e.message ?? '无法调起安装器';
+    } on MissingPluginException {
+      return '安装器渠道未注册（宿主环境异常）';
     }
   }
 }

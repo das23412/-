@@ -54,6 +54,8 @@ class Book {
   });
 
   /// 在线书在数据库中的唯一路径（books.path 要求 UNIQUE 且 NOT NULL）。
+  /// sourceId 是完整 URL（含协议），天然与 bookUrl 形成分隔；不引入额外
+  /// 分隔符是为了保持与 v1.6.0 已入库路径兼容（避免老用户书架条目失效）。
   static String onlinePath(String sourceId, String bookUrl) =>
       'online://$sourceId$bookUrl';
 
@@ -136,9 +138,9 @@ class Book {
       };
 
   static Book fromMap(Map<String, Object?> m) => Book(
-        id: m['id'] as int,
-        path: m['path'] as String,
-        title: m['title'] as String,
+        id: (m['id'] as num?)?.toInt(),
+        path: (m['path'] as String?) ?? '',
+        title: (m['title'] as String?) ?? '未命名',
         format: BookFormat.values.firstWhere(
           (f) => f.name == m['format'],
           orElse: () => BookFormat.unknown,
@@ -194,8 +196,8 @@ class Bookmark {
       };
 
   static Bookmark fromMap(Map<String, Object?> m) => Bookmark(
-        id: m['id'] as int,
-        bookId: m['book_id'] as int,
+        id: (m['id'] as num?)?.toInt(),
+        bookId: (m['book_id'] as num?)?.toInt() ?? 0,
         chapterIndex: (m['chapter_index'] as num?)?.toInt() ?? 0,
         chapterTitle: (m['chapter_title'] as String?) ?? '',
         charOffset: (m['char_offset'] as num?)?.toInt() ?? 0,

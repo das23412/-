@@ -23,15 +23,43 @@ void main() {
   });
 
   group('章节切分', () {
-    test('常规切分', () {
-      final text = [
-        '第一卷 少年',
-        '第1章 开端',
-        '这是第一章的正文。',
-        '第二段落。',
-        '第2章 相遇',
-        '这是第二章的正文。',
-      ].join('\n');
+    test('目录页误判防护', () {
+    // 数字开头无分隔符的正文行不是标题
+    expect(TxtParser.looksLikeChapterTitle('2023年冬天，雪下得很大。'), isFalse);
+    // 点导线 + 页码结尾是目录行
+    expect(TxtParser.looksLikeChapterTitle('第一章 风起…………1'), isFalse);
+    expect(TxtParser.looksLikeChapterTitle('第二章 云涌…………5'), isFalse);
+    expect(TxtParser.looksLikeChapterTitle('第3章 雷动  12'), isFalse);
+    expect(TxtParser.looksLikeChapterTitle('1234. 标题'), isTrue);
+  });
+
+  test('连续假标题（目录块）折叠为一个', () {
+    // 序章/引子/楔子 都是合法标题词，但连续 3 个是目录块特征
+    final text = '序章\n引子\n楔子\n第1章 正文开始\n正文内容。';
+    final chapters = TxtParser.splitChapters('书', text);
+    expect(chapters.length, 2);
+    expect(chapters[0].title, '序章');
+    expect(chapters[1].title, '第1章 正文开始');
+  });
+
+  test('目录页行不再产生假章节', () {
+    final text = '第一章 风起…………1\n第二章 云涌…………5\n第1章 正文开始\n这里是真的正文。';
+    final chapters = TxtParser.splitChapters('书', text);
+    // 目录行被拒判，不产生以目录行为标题的章节
+    for (final c in chapters) {
+      expect(c.title.contains('…………'), isFalse);
+    }
+  });
+
+  test('常规切分', () {
+    final text = [
+      '第一卷 少年',
+      '第1章 开端',
+      '这是第一章的正文。',
+      '第二段落。',
+      '第2章 相遇',
+      '这是第二章的正文。',
+    ].join('\n');
       final chapters = TxtParser.splitChapters('书名', text);
       expect(chapters.length, 3);
       expect(chapters[0].title, '第一卷 少年');

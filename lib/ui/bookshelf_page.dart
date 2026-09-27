@@ -41,6 +41,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
   @override
   void dispose() {
     _observedLib?.removeListener(_onLibChanged);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -65,6 +66,8 @@ class _BookshelfPageState extends State<BookshelfPage> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       showDragHandle: true,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheet) => SafeArea(
@@ -808,7 +811,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
               Expanded(
                 child: Text(
                   book.lastReadAt == 0
-                      ? formatTimeCN(book.addedAt)
+                      ? formatDateTimeCN(book.addedAt)
                       : formatTimeCN(book.lastReadAt),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

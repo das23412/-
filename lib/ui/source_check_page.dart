@@ -38,7 +38,7 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
   final _keywordController = TextEditingController(text: '我的');
   List<_SourceCheck> _checks = [];
   bool _running = false;
-  int _doneCount = 0;
+  bool _cancelled = false;
 
   @override
   void dispose() {
@@ -62,20 +62,40 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
       _snack('没有启用的书源');
       return;
     }
+    _cancelled = false;
     setState(() {
       _running = true;
-      _doneCount = 0;
       _checks = sources.map(_SourceCheck.new).toList();
     });
-    for (final c in _checks) {
-      // 各书源并行，单个书源内部三步串行
-      unawaited(_runOne(c, keyword));
+    // 并发上限 3：几十个源同时开 socket 会瞬间打满连接池
+    var index = 0;
+    Future<void> worker() async {
+      while (!_cancelled && index < _checks.length) {
+        final c = _checks[index];
+        index++;
+        c.running = true;
+        _refresh();
+        await _runOne(c, keyword);
+        c.running = false;
+        _refresh();
+      }
     }
+
+    final workers = <Future<void>>[
+      for (var i = 0; i < 3 && i < _checks.length; i++) worker(),
+    ];
+    unawaited(Future.wait(workers).then((_) {
+      if (mounted && !_cancelled) setState(() => _running = false);
+      if (mounted && _cancelled) setState(() => _running = false);
+    }));
+  }
+
+  void _stop() {
+    _cancelled = true;
+    _snack('已停止检测');
   }
 
   Future<void> _runOne(_SourceCheck c, String keyword) async {
-    c.running = true;
-    _refresh();
     final s = c.source;
 
     // 第 1 步：搜索
@@ -91,13 +111,12 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
       );
     } on SourceUnsupportedException catch (e) {
       c.steps[0] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
-      _finishSource(c);
       return;
     } catch (e) {
       c.steps[0] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
-      _finishSource(c);
       return;
     }
+    if (_cancelled) return;
 
     // 第 2 步：目录
     sw.reset();
@@ -113,13 +132,12 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
       );
     } on SourceUnsupportedException catch (e) {
       c.steps[1] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
-      _finishSource(c);
       return;
     } catch (e) {
       c.steps[1] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
-      _finishSource(c);
       return;
     }
+    if (_cancelled) return;
 
     // 第 3 步：正文
     sw.reset();
@@ -137,20 +155,10 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
     } catch (e) {
       c.steps[2] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
     }
-    _finishSource(c);
-  }
-
-  void _finishSource(_SourceCheck c) {
-    c.running = false;
-    _doneCount++;
-    _refresh();
   }
 
   void _refresh() {
     if (mounted) setState(() {});
-    if (_checks.isNotEmpty && _doneCount >= _checks.length && mounted) {
-      setState(() => _running = false);
-    }
   }
 
   void _snack(String msg) {
@@ -182,18 +190,18 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton.icon(
-                    onPressed: _running ? null : _start,
-                    icon: _running
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.play_arrow, size: 18),
-                    label: Text(_running
-                        ? '$_doneCount/${_checks.length}'
-                        : '批量检测'),
-                  ),
+                  if (_running)
+                    OutlinedButton.icon(
+                      onPressed: _stop,
+                      icon: const Icon(Icons.stop, size: 18),
+                      label: const Text('停止'),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed: _start,
+                      icon: const Icon(Icons.play_arrow, size: 18),
+                      label: const Text('批量检测'),
+                    ),
                 ],
               ),
             ),

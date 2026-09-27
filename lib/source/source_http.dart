@@ -33,17 +33,24 @@ class SourceHttp {
     String? charset,
     Duration timeout = const Duration(seconds: 15),
   }) async {
-    final uri = Uri.parse(url);
+    final Uri uri;
+    try {
+      uri = Uri.parse(url);
+    } on FormatException {
+      throw const HttpException('书源 URL 格式不正确');
+    }
     final client = _client;
     try {
-      client.userAgent =
-          headers['User-Agent'] ?? headers['user-agent'] ?? defaultUa;
       final HttpClientRequest req;
       if (method.toUpperCase() == 'POST') {
         req = await client.postUrl(uri);
       } else {
         req = await client.getUrl(uri);
       }
+      // UA 按请求设置在请求头上：共享 client 的 client.userAgent 是全局的，
+      // 并发时自定义 UA 会串到其他源的在途请求
+      final ua = headers['User-Agent'] ?? headers['user-agent'] ?? defaultUa;
+      req.headers.set('User-Agent', ua);
       headers.forEach((k, v) {
         if (k.toLowerCase() != 'user-agent') req.headers.set(k, v);
       });
@@ -51,6 +58,10 @@ class SourceHttp {
         req.write(body);
       }
       final resp = await req.close().timeout(timeout);
+      // 404/反爬拦截页不应被宽泛的书源规则解析成"章节列表"
+      if (resp.statusCode >= 400) {
+        throw HttpException('HTTP ${resp.statusCode}');
+      }
       // BytesBuilder 增量累积（旧写法 bytes.addAll 是 O(n²) 拷贝）；
       // stream.timeout 让响应体的每个间隔也受超时约束，慢速站点不会挂死阅读页
       final builder = BytesBuilder(copy: false);
@@ -58,10 +69,13 @@ class SourceHttp {
         await for (final chunk in resp.timeout(timeout)) {
           builder.add(chunk);
           if (builder.length > maxBytes) {
+            // 抛出前主动断开连接，避免超限连接回到空闲池被复用
+            resp.detachSocket();
             throw const HttpException('响应超过 8MB 上限');
           }
         }
       } on TimeoutException {
+        resp.detachSocket();
         throw const HttpException('书源响应超时');
       }
       final bytes = builder.takeBytes();
@@ -84,8 +98,11 @@ class SourceHttp {
   }
 
   static String? _charsetFromContentType(String contentType) {
-    final m =
-        RegExp(r'charset=([\w-]+)', caseSensitive: false).firstMatch(contentType);
+    // 值可能带引号：charset="gbk"
+    final m = RegExp(
+            r'charset=\s*"?([\w-]+)"?',
+            caseSensitive: false)
+        .firstMatch(contentType);
     return m?.group(1);
   }
 

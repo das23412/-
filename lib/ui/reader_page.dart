@@ -85,6 +85,9 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _rsChanged() {
     if (!mounted) return;
+    // 纯翻页（页码变化）且菜单未打开时无需整页重建：页面内容由
+    // PageView/TurnPageView 自行驱动，rs.currentPage 只影响菜单显示
+    if (rs.lastChangePageOnly && !_menuVisible) return;
     setState(() {});
   }
 
@@ -212,10 +215,11 @@ class _ReaderPageState extends State<ReaderPage> {
       final pageInChapter = layout.pageOfLine(line);
       final windowIndex = _winPrevCount + pageInChapter;
       if (context.read<ReaderConfig>().settings.pageMode == 3) {
-        _scrollController?.jumpTo((pageInChapter *
-                layout.linesPerPage *
-                layout.lineHeight)
-            .clamp(0.0, double.infinity));
+        final sc = _scrollController;
+        if (sc != null && sc.hasClients) {
+          sc.jumpTo((pageInChapter * layout.linesPerPage * layout.lineHeight)
+              .clamp(0.0, sc.position.maxScrollExtent));
+        }
       } else if (context.read<ReaderConfig>().settings.pageMode == 0) {
         _turnCtrl?.jumpToPage(windowIndex.clamp(0, _windowTotal - 1));
       } else if (_pageController?.hasClients ?? false) {
@@ -242,11 +246,24 @@ class _ReaderPageState extends State<ReaderPage> {
       );
 
   /// 页面背景装饰：色卡或自定义图片（全屏不透明页面必须自带背景）。
+  /// 文件存在性只查一次并缓存：每个页 itemBuilder 都 existsSync 是纯浪费。
+  File? _bgFileCached;
+  String? _bgCheckedPath;
+
+  File? _resolveBackgroundFile(String bgPath) {
+    if (_bgCheckedPath != bgPath) {
+      _bgCheckedPath = bgPath;
+      final f = File(bgPath);
+      _bgFileCached = f.existsSync() ? f : null;
+    }
+    return _bgFileCached;
+  }
+
   Decoration _pageDecoration(ReaderConfig cfg, ReaderPalette palette) {
     final bgPath = cfg.settings.customBgPath;
     if (cfg.settings.bgIndex == -1 && bgPath.isNotEmpty) {
-      final f = File(bgPath);
-      if (f.existsSync()) {
+      final f = _resolveBackgroundFile(bgPath);
+      if (f != null) {
         return BoxDecoration(
           image: DecorationImage(image: FileImage(f), fit: BoxFit.cover),
         );
@@ -433,11 +450,13 @@ class _ReaderPageState extends State<ReaderPage> {
         final target = ((_winPrevCount + pageInChapter)
                 .clamp(0, math.max(0, _windowTotal - 1)))
             .toInt();
-        if (cfg.settings.pageMode == 3) {
-          _scrollController?.jumpTo(
-              (pageInChapter * layout.linesPerPage * layout.lineHeight)
-                  .clamp(0.0, double.infinity));
-        } else if (cfg.settings.pageMode == 0) {
+      if (cfg.settings.pageMode == 3) {
+        final sc = _scrollController;
+        if (sc != null && sc.hasClients) {
+          sc.jumpTo((pageInChapter * layout.linesPerPage * layout.lineHeight)
+              .clamp(0.0, sc.position.maxScrollExtent));
+        }
+      } else if (cfg.settings.pageMode == 0) {
           // 仿真模式：_pageController 不存在，必须驱动 TurnPageController，
           // 否则进度恢复完全失效且会反向覆盖真实进度
           _turnCtrl?.jumpToPage(target);
@@ -498,8 +517,8 @@ class _ReaderPageState extends State<ReaderPage> {
   Widget _background(ReaderConfig cfg, {required bool isDark}) {
     final bgPath = cfg.settings.customBgPath;
     if (cfg.settings.bgIndex == -1 && bgPath.isNotEmpty) {
-      final file = File(bgPath);
-      if (file.existsSync()) {
+      final file = _resolveBackgroundFile(bgPath);
+      if (file != null) {
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -973,18 +992,28 @@ class _ReaderPageState extends State<ReaderPage> {
         initialChildSize: 0.7,
         maxChildSize: 0.95,
         expand: false,
-        builder: (ctx, controller) => Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text('目录 · 共${rs.chapters.length}章',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-            ),
-            Expanded(
-              child: ListView.builder(
-                controller: controller,
-                itemCount: rs.chapters.length,
-                itemBuilder: (ctx, i) {
+        builder: (ctx, controller) {
+          // 目录定位到当前章（几千章的书不必从头翻）
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (controller.hasClients && rs.currentChapter > 0) {
+              controller.jumpTo(
+                  (rs.currentChapter * 48.0)
+                      .clamp(0.0, controller.position.maxScrollExtent));
+            }
+          });
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('目录 · 共${rs.chapters.length}章',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: controller,
+                  itemCount: rs.chapters.length,
+                  itemExtent: 48,
+                  itemBuilder: (ctx, i) {
                   final current = i == rs.currentChapter;
                   return ListTile(
                     dense: true,
@@ -1008,7 +1037,8 @@ class _ReaderPageState extends State<ReaderPage> {
               ),
             ),
           ],
-        ),
+        );
+        },
       ),
     );
   }

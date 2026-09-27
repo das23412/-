@@ -149,6 +149,75 @@ void main() {
       );
     });
 
+    test('&& 合并（空部分跳过，换行连接）', () {
+      final d = RuleEngine.parseHtml('<p id="a">A文本</p><p id="b">B文本</p>');
+      expect(
+        RuleEngine.evalString(
+            '@css:#a@text&&@css:#b@text', root: d.documentElement!),
+        'A文本\nB文本',
+      );
+    });
+
+    test('&& 中非法选择器视为空，不影响其余部分', () {
+      final d = RuleEngine.parseHtml('<p id="b">B文本</p>');
+      expect(
+        RuleEngine.evalString(
+            '@css:##[bad&&@css:#b@text', root: d.documentElement!),
+        'B文本',
+      );
+    });
+
+    test('|| 分支中的非法选择器不中断兜底链', () {
+      final d = RuleEngine.parseHtml('<p id="ok">兜底成功</p>');
+      expect(
+        RuleEngine.evalString(
+            '@css:##[nope||@css:#ok@text', root: d.documentElement!),
+        '兜底成功',
+      );
+    });
+
+    test('\$..key 递归下降（前序遍历）', () {
+      final json = {
+        'title': 'T0',
+        'a': {
+          'title': 'T1',
+          'items': [
+            {'title': 'T2'}
+          ],
+        },
+      };
+      expect(RuleEngine.evalString('@json:\$..title', json: json), 'T0');
+      final nodes = RuleEngine.evalList('@json:\$..title', json: json);
+      expect(nodes.map((n) => n.json), ['T0', 'T1', 'T2']);
+    });
+
+    test('提取器矩阵与定位链', () {
+      final d = RuleEngine.parseHtml(
+          '<div id="x"><span>Hi</span><b> yo</b><em>&amp;more</em></div>');
+      final root = d.documentElement!;
+      // textnodes / ownText：直接文本
+      expect(RuleEngine.evalString('@css:#x@textnodes', root: root), 'Hi yo &more');
+      // html / all
+      expect(RuleEngine.evalString('@css:#x@html', root: root),
+          '<span>Hi</span><b> yo</b><em>&amp;more</em>');
+      expect(RuleEngine.evalString('@css:#x@all', root: root),
+          contains('<div id="x"'));
+      // textlen：可见文本长度
+      expect(RuleEngine.evalString('@css:#x@textlen', root: root),
+          '${'<span>Hi</span><b> yo</b><em>&more</em>'.length}');
+      // id.X 链式定位
+      expect(
+          RuleEngine.evalString('id.x@text', root: root), 'Hi yo &more');
+      // Map 上的 [*] 展开
+      final json = {'m': {'a': 1, 'b': 2}};
+      final nodes = RuleEngine.evalList('@json:\$..[*]', json: json);
+      expect(nodes.map((n) => n.json), containsAll([1, 2]));
+    });
+
+    test('非法 ## 正则回退为原文本', () {
+      expect(RuleEngine.applyReplaceRegex('abc', r'##(unclosed##X'), 'abc');
+    });
+
     test('净化作用于规则结果', () {
       final d = RuleEngine.parseHtml('<p>标题（广告）</p>');
       expect(

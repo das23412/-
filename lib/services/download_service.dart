@@ -60,7 +60,11 @@ class DownloadService {
       final charset = star.group(1)?.toUpperCase() ?? 'UTF-8';
       var value = star.group(2)!.trim().replaceAll('"', '');
       if (charset == 'UTF-8') {
-        value = Uri.decodeComponent(value);
+        try {
+          value = Uri.decodeComponent(value);
+        } on ArgumentError {
+          // 保持原值
+        }
       }
       if (value.isNotEmpty) return value;
     }
@@ -85,23 +89,44 @@ class DownloadService {
     }
   }
 
-  /// 去掉文件名里的非法字符。
+  /// 去掉文件名里的非法字符并限制长度。
   static String _sanitize(String name) {
     final cleaned = name
         .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
+    // 文件系统通常上限 255 字节，这里保守截断到 120 字符
+    if (cleaned.length > 120) return cleaned.substring(0, 120).trim();
     return cleaned;
   }
 
-  /// 预检链接：只读响应头，返回文件名与大小（size 为 -1 表示未知）。
+  /// 预检链接：先 HEAD 读取响应头（不拉正文），失败再回退 GET。
+  /// 返回文件名与大小（size 为 -1 表示未知）。
   static Future<(String filename, int size)> probe(String urlStr) async {
     final uri = _mustParse(urlStr);
     final client = HttpClient();
     try {
       client.userAgent = userAgent;
-      final req = await client.getUrl(uri);
-      final resp = await req.close().timeout(const Duration(seconds: 30));
+      HttpClientResponse resp;
+      try {
+        // HEAD：只为拿响应头，避免为大文件白拉流量
+        final headReq = await client.headUrl(uri);
+        resp = await headReq.close().timeout(const Duration(seconds: 30));
+        if (resp.statusCode == 404) {
+          throw const DownloadException('链接不存在（404），请确认是否失效');
+        }
+        if (resp.statusCode != 200) {
+          // HEAD 被拒（403/405 等）：回退 GET 重试
+          final getReq = await client.getUrl(uri);
+          resp = await getReq.close().timeout(const Duration(seconds: 30));
+        }
+      } on DownloadException {
+        rethrow;
+      } catch (_) {
+        // 连接异常：回退 GET
+        final getReq = await client.getUrl(uri);
+        resp = await getReq.close().timeout(const Duration(seconds: 30));
+      }
       if (resp.statusCode == 404) {
         throw const DownloadException('链接不存在（404），请确认是否失效');
       }
@@ -147,7 +172,12 @@ class DownloadService {
       }
       final headers = <String, String>{};
       resp.headers.forEach((k, v) => headers[k.toLowerCase()] = v.join('; '));
-      final filename = extractFilename(headers: headers, uri: uri);
+      // 重定向后以最终地址推断文件名（原始 URL 可能只是短链）
+      final finalUrl = resp.redirects.isNotEmpty
+          ? resp.redirects.last.location.toString()
+          : uri.toString();
+      final filename = extractFilename(
+          headers: headers, uri: Uri.parse(finalUrl));
       if (BookFormat.fromPath(filename) == BookFormat.unknown) {
         throw const DownloadException('该链接不是支持的小说文件');
       }
@@ -160,7 +190,8 @@ class DownloadService {
       final sink = tmp.openWrite();
       int received = 0;
       try {
-        await for (final chunk in resp) {
+        // 响应体逐块超时：服务器中途停滞不会永久挂起（配合 PopScope 用户也不会被锁死）
+        await for (final chunk in resp.timeout(const Duration(seconds: 30))) {
           received += chunk.length;
           if (received > maxBytes) {
             throw const DownloadException('文件超过 500MB 上限');
@@ -175,6 +206,10 @@ class DownloadService {
           await sink.close();
         } catch (_) {}
         if (tmp.existsSync()) tmp.deleteSync();
+        if (e is FileSystemException) {
+          // 磁盘满等写入异常转成可读提示，而不是裸的底层异常
+          throw DownloadException('写入失败（磁盘空间不足？）：${e.message}');
+        }
         rethrow;
       }
       if (received == 0) {

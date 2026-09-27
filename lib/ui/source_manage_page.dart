@@ -18,20 +18,17 @@ class SourceManagePage extends StatefulWidget {
 }
 
 class _SourceManagePageState extends State<SourceManagePage> {
-  bool _allowSources = false;
-
   @override
   void initState() {
     super.initState();
-    _allowSources = AppSettings.instance.allowSources;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) context.read<SourceState>().reload();
     });
   }
 
   Future<void> _toggleNetwork(bool v) async {
-    setState(() => _allowSources = v);
     AppSettings.instance.allowSources = v;
+    setState(() {});
   }
 
   Future<void> _importFromText() async {
@@ -60,8 +57,9 @@ class _SourceManagePageState extends State<SourceManagePage> {
         ],
       ),
     );
-    if (ok != true || !mounted) return;
     final text = controller.text.trim();
+    controller.dispose();
+    if (ok != true || !mounted) return;
     if (text.isEmpty) return;
     final msg = await context.read<SourceState>().importText(text);
     if (mounted) {
@@ -175,7 +173,7 @@ class _SourceManagePageState extends State<SourceManagePage> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: SwitchListTile(
-              value: _allowSources,
+              value: AppSettings.instance.allowSources,
               onChanged: _toggleNetwork,
               title: const Text('允许书源联网'),
               subtitle: const Text('默认关闭。搜索、目录、正文请求都需要此开关。'),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// 与原生 MainActivity 通信，接收“用墨阅打开”的文件。
@@ -14,14 +15,22 @@ class IntentChannel {
       return await _channel.invokeMethod<String>('initialFilePath');
     } on PlatformException {
       return null;
+    } on MissingPluginException {
+      // 测试环境/宿主未注册渠道：静默降级
+      return null;
     }
   }
 
   /// 监听应用运行中新收到的打开请求。
   static void onNewFilePath(void Function(String path) callback) {
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'onNewFilePath' && call.arguments is String) {
-        callback(call.arguments as String);
+      if (call.method == 'onNewFilePath') {
+        if (call.arguments is String) {
+          callback(call.arguments as String);
+        } else {
+          // 原生侧参数类型变化时给出可见线索，而不是无声失效
+          debugPrint('onNewFilePath 参数类型异常：${call.arguments.runtimeType}');
+        }
       }
       return null;
     });

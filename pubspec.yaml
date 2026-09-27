@@ -1,5 +1,5 @@
 name: moyue
-description: "墨阅 — 纯本地、无联网的中文小说阅读器（TXT/EPUB/MOBI/AZW3/FB2/HTML）"
+description: "墨阅 — 本地优先的中文小说阅读器（TXT/EPUB/MOBI/AZW3/FB2/HTML），可选书源在线搜索与下载"
 publish_to: 'none'
 
 version: 1.6.1+14

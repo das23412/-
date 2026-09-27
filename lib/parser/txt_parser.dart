@@ -12,8 +12,9 @@ class TxtParser {
     RegExp(r'^\s*第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷部篇]\s*.{0,40}$'),
     // Chapter 12 / CHAPTER XII
     RegExp(r'^\s*chapter\s+[0-9ivxIVX]+\b.{0,40}$', caseSensitive: false),
-    // 12.、1234、纯数字行 + 短标题（如 "12 标题"）
-    RegExp(r'^\s*[0-9]{1,4}\s*[、.．:：]?\s*[^0-9、.．:：\s].{0,30}$'),
+    // 12.、1234.、纯数字行 + 分隔符 + 短标题（必须有分隔符，否则
+    // '2023年冬天，雪下得很大。' 这类正文会被误判）
+    RegExp(r'^\s*[0-9]{1,4}\s*[、.．:：]\s*[^0-9、.．:：\s].{0,30}$'),
     // 【第X章】 / （第X章）
     RegExp(r'^\s*[\[【（(]\s*第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷]\s*[^)\]】）]*[\])】）]\s*.{0,30}$'),
     // 序章 / 楔子 / 尾声 / 番外
@@ -24,6 +25,9 @@ class TxtParser {
   static bool looksLikeChapterTitle(String line) {
     final t = line.trim();
     if (t.isEmpty || t.length > 50) return false;
+    // 目录页特征：省略号/点导线 + 页码结尾，或多个空格 + 页码结尾
+    if (RegExp(r'[.…·•]{2,}\s*[0-9]{1,4}\s*$').hasMatch(t)) return false;
+    if (RegExp(r'\s{2,}[0-9]{1,4}\s*$').hasMatch(t)) return false;
     // 排除明显是正文的长句（含句号句尾的概率高）
     for (final p in chapterPatterns) {
       if (p.hasMatch(t)) return true;
@@ -60,8 +64,33 @@ class TxtParser {
         consecutive = 0;
       }
     }
+    // 命中的行号列表：把"目录页"的密集假标题折叠掉——
+    // 连续 3 个及以上、彼此间隔 ≤2 行的标题行（目录块）只保留第一个
+    final collapsed = <int>[];
+    int prev = -10;
+    int runLen = 0;
+    for (final m in marks) {
+      if (m - prev > 2) {
+        // 与前一个命中间隔过大：先结算上一个 run（≥3 才折叠），再开新 run
+        if (runLen >= 3) {
+          collapsed.removeRange(collapsed.length - (runLen - 1), collapsed.length);
+        }
+        runLen = 1;
+      } else {
+        runLen++;
+      }
+      collapsed.add(m);
+      prev = m;
+    }
+    if (runLen >= 3) {
+      collapsed.removeRange(collapsed.length - (runLen - 1), collapsed.length);
+    }
+    marks
+      ..clear()
+      ..addAll(collapsed);
+
     // 几乎检测不到章节（如纯文本散文）时按固定字数切块。
-    // 注意：不能额外按“标题行占比”放弃切分——正常小说的章节远比行数稀疏，
+    // 注意：不能额外按"标题行占比"放弃切分——正常小说的章节远比行数稀疏，
     // 占比规则会把好书整本切成大块。
     if (marks.length < 2) {
       return _chunkBySize(bookTitle, text);

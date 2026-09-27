@@ -7,10 +7,10 @@ import 'parser.dart';
 /// 单个 HTML 文件小说解析。
 class HtmlParser {
   static ParsedBook parse(File file) {
-    var html = CharsetDecoder.decode(file.readAsBytesSync());
+    final bytes = file.readAsBytesSync();
+    var html = CharsetDecoder.decode(bytes);
     // 若 <meta charset="gbk"> 等声明与 UTF-8 解码结果冲突，简单启发：出现大量替换符则按 GBK 重解
     if (html.contains('\uFFFD\uFFFD')) {
-      final bytes = file.readAsBytesSync();
       final retry = _decodeWithDeclaredCharset(bytes);
       if (retry != null) html = retry;
     }

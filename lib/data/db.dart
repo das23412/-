@@ -8,18 +8,19 @@ class AppDb {
   AppDb._();
   static final AppDb instance = AppDb._();
 
-  Database? _db;
-
-  Future<Database> get database async {
-    _db ??= await _open();
-    return _db!;
+  Future<Database>? _dbFuture;
+  /// 缓存打开Future：`_db ??= await _open()` 在 await 期间会有第二个
+  /// 调用者再次打开连接，产生两个并发连接。
+  Future<Database> get database {
+    _dbFuture ??= _open();
+    return _dbFuture!;
   }
 
   Future<Database> _open() async {
     final dir = await getDatabasesPath();
-    return openDatabase(
+    final db = await openDatabase(
       p.join(dir, 'moyue.db'),
-      version: 2,
+      version: 3,
       // SQLite 默认不启用外键约束，必须显式打开，
       // 否则删书后书签/章节缓存会永久残留
       onConfigure: (db) async {
@@ -101,8 +102,19 @@ class AppDb {
           await _createSourceTables(db);
           await _createBookIndexes(db);
         }
+        if (oldVersion < 3) {
+          // v3：正文缓存带章节地址（目录刷新后旧缓存按 url 失效，不再错位）。
+          // v1→v3 直升时 _createSourceTables 已建含 url 列的新表，先查列再补
+          final cols = await db.rawQuery('PRAGMA table_info(content_cache)');
+          final hasUrl = cols.any((c) => c['name'] == 'url');
+          if (!hasUrl) {
+            await db.execute(
+                "ALTER TABLE content_cache ADD COLUMN url TEXT NOT NULL DEFAULT ''");
+          }
+        }
       },
     );
+    return db;
   }
 
   /// 书架表查询索引（allBooks 每次按 last_read_at/added_at 排序）。
@@ -140,6 +152,7 @@ class AppDb {
         book_id INTEGER NOT NULL,
         idx INTEGER NOT NULL,
         text TEXT NOT NULL,
+        url TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(book_id, idx),
         FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
       )
@@ -347,20 +360,29 @@ class AppDb {
         .toList();
   }
 
-  Future<void> saveContent(int bookId, int idx, String text) async {
+  Future<void> saveContent(
+      int bookId, int idx, String text, {required String url}) async {
     final db = await database;
     await db.insert(
       'content_cache',
-      {'book_id': bookId, 'idx': idx, 'text': text},
+      {'book_id': bookId, 'idx': idx, 'text': text, 'url': url},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    // 全局上限：只保留最近 400 章正文，防止无限增长
+    await db.delete('content_cache',
+        where: 'rowid NOT IN (SELECT rowid FROM content_cache ORDER BY rowid DESC LIMIT 400)');
   }
 
-  Future<String?> loadContent(int bookId, int idx) async {
+  Future<String?> loadContent(int bookId, int idx, {String? url}) async {
     final db = await database;
     final rows = await db.query('content_cache',
         where: 'book_id = ? AND idx = ?', whereArgs: [bookId, idx], limit: 1);
     if (rows.isEmpty) return null;
+    // 目录刷新后章节地址可能变化：url 对不上视为过期缓存
+    final cachedUrl = rows.first['url'] as String? ?? '';
+    if (url != null && url.isNotEmpty && cachedUrl.isNotEmpty && cachedUrl != url) {
+      return null;
+    }
     return rows.first['text'] as String;
   }
 }

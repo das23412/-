@@ -66,6 +66,22 @@ class SourceException implements Exception {
   String toString() => message;
 }
 
+/// 在隔离线程中执行正文抓取+解析+净化。
+///
+/// 书源自带的 `##正则##` 会在整章正文上运行，嵌套量词类畸形正则会
+/// 灾难性回溯——跑在 UI 线程会永久冻结界面（只能杀进程）。
+/// 通过 `compute` 调用本函数，冻结被隔离在子线程中。
+/// 顶层函数才能被 compute 派发（不能是闭包或实例方法）。
+String loadContentInIsolate(Map<String, String> job) {
+  final raw = job['raw'] ?? '';
+  final url = job['url'] ?? '';
+  final decoded = jsonDecode(raw);
+  final source =
+      decoded is Map<String, dynamic> ? BookSource.fromLegadoJson(decoded) : null;
+  if (source == null) throw const SourceException('书源数据损坏');
+  return SourceService.loadContent(source, url);
+}
+
 /// 书源服务：搜索、详情、目录、正文。
 ///
 /// 解析逻辑（parseSearch/parseToc/parseContent）为纯函数，可离线单测；
@@ -310,6 +326,9 @@ class SourceService {
       url = next;
     }
     final content = buf.toString().trim();
+    if (content.length > 2000000) {
+      throw const SourceException('正文超过 2MB，疑似异常页面');
+    }
     if (content.isEmpty) {
       throw const SourceException('正文内容为空');
     }

@@ -17,13 +17,15 @@ class AppSettings {
   set themeMode(int v) => _prefs.setInt(_kThemeMode, v);
 
   // ---------- 阅读器 ----------
+  // 所有取值带范围钳制：历史/手工写入的越界值（如 lineHeight=0 导致除零）不再透传
   static const _kFontSize = 'reader_font_size';
-  double get fontSize => _prefs.getDouble(_kFontSize) ?? 19;
-  set fontSize(double v) => _prefs.setDouble(_kFontSize, v);
+  double get fontSize => (_prefs.getDouble(_kFontSize) ?? 19).clamp(12.0, 32.0);
+  set fontSize(double v) => _prefs.setDouble(_kFontSize, v.clamp(12.0, 32.0));
 
   static const _kLineHeight = 'reader_line_height';
-  double get lineHeight => _prefs.getDouble(_kLineHeight) ?? 1.8;
-  set lineHeight(double v) => _prefs.setDouble(_kLineHeight, v);
+  double get lineHeight =>
+      (_prefs.getDouble(_kLineHeight) ?? 1.8).clamp(1.0, 3.0);
+  set lineHeight(double v) => _prefs.setDouble(_kLineHeight, v.clamp(1.0, 3.0));
 
   static const _kIndent = 'reader_indent';
   bool get indent => _prefs.getBool(_kIndent) ?? true;
@@ -31,12 +33,12 @@ class AppSettings {
 
   /// 翻页模式：0 仿真 / 1 平移 / 2 覆盖 / 3 上下滚动
   static const _kPageMode = 'reader_page_mode';
-  int get pageMode => _prefs.getInt(_kPageMode) ?? 0;
-  set pageMode(int v) => _prefs.setInt(_kPageMode, v);
+  int get pageMode => (_prefs.getInt(_kPageMode) ?? 0).clamp(0, 3);
+  set pageMode(int v) => _prefs.setInt(_kPageMode, v.clamp(0, 3));
 
   /// 阅读背景索引：0 纸白 1 米黄 2 护眼绿 3 羊皮纸 4 夜黑 -1 自定义图片
   static const _kBgIndex = 'reader_bg_index';
-  int get bgIndex => _prefs.getInt(_kBgIndex) ?? 1;
+  int get bgIndex => (_prefs.getInt(_kBgIndex) ?? 1).clamp(-1, 4);
   set bgIndex(int v) => _prefs.setInt(_kBgIndex, v);
 
   static const _kCustomBg = 'reader_custom_bg';

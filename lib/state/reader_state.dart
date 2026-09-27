@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter/painting.dart';
 
 import '../core/book_format.dart';
@@ -17,8 +18,10 @@ import '../source/source_service.dart';
 const String _failedPrefix = '[本章加载失败]';
 
 /// 阅读会话状态：负责解析、分页、进度、书签。
-class ReaderState extends ChangeNotifier {
-  ReaderState(this.book);
+class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
+  ReaderState(this.book) {
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   final Book book;
   final AppDb _db = AppDb.instance;
@@ -54,11 +57,16 @@ class ReaderState extends ChangeNotifier {
   /// 在线书已解析的书源实例（避免每加载一章都查库反序列化）。
   BookSource? _source;
 
+  bool _disposed = false;
+
+  /// 上一次通知是否仅为页码变化（UI 据此跳过菜单关闭时的整页重建）。
+  bool lastChangePageOnly = false;
+
   /// 打开书：解析文件 → 恢复进度 → 载入书签。
   Future<void> load() async {
     loading = true;
     error = null;
-    notifyListeners();
+    _safeNotify();
     try {
       if (book.isOnline) {
         await _loadOnline();
@@ -68,7 +76,7 @@ class ReaderState extends ChangeNotifier {
     } catch (e) {
       error = '打开失败：${e.toString()}';
       loading = false;
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -77,7 +85,7 @@ class ReaderState extends ChangeNotifier {
     if (!File(path).existsSync()) {
       error = '文件不存在，可能已被移动或删除：${book.title}';
       loading = false;
-      notifyListeners();
+      _safeNotify();
       return;
     }
     ParsedBook parsed;
@@ -95,7 +103,7 @@ class ReaderState extends ChangeNotifier {
     if (chapters.isEmpty) {
       error = '没有解析到可读的正文内容';
       loading = false;
-      notifyListeners();
+      _safeNotify();
       return;
     }
     // 章节累计偏移
@@ -112,7 +120,7 @@ class ReaderState extends ChangeNotifier {
     await _refreshMeta();
     bookmarks = await _db.bookmarksOf(book.id!);
     loading = false;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// 在线书：目录一次拉取（缓存优先），正文按章加载。
@@ -155,7 +163,7 @@ class ReaderState extends ChangeNotifier {
     await _ensureChapterLoaded(currentChapter, foreground: true);
     bookmarks = await _db.bookmarksOf(book.id!);
     loading = false;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// 确保某章正文已加载（在线书）：缓存 → 网络。
@@ -164,7 +172,7 @@ class ReaderState extends ChangeNotifier {
     if (idx < 0 || idx >= chapters.length) return;
     final cur = chapters[idx].text;
     if (cur.isNotEmpty && !cur.startsWith(_failedPrefix)) return;
-    final cached = await _db.loadContent(book.id!, idx);
+    final cached = await _db.loadContent(book.id!, idx, url: _chapterUrls[idx]);
     if (cached != null && cached.isNotEmpty) {
       _applyChapterText(idx, cached);
       return;
@@ -176,18 +184,22 @@ class ReaderState extends ChangeNotifier {
     }
     if (foreground) {
       chapterLoading = true;
-      notifyListeners();
+      _safeNotify();
     }
     try {
-      final text = await SourceService.loadContent(source, _chapterUrls[idx]);
+      // 正文抓取+解析+净化全部在隔离线程执行：书源畸形正则不再冻结 UI
+      final text = await compute(loadContentInIsolate, {
+        'raw': source.rawJson,
+        'url': _chapterUrls[idx],
+      });
       _applyChapterText(idx, text);
-      await _db.saveContent(book.id!, idx, text);
+      await _db.saveContent(book.id!, idx, text, url: _chapterUrls[idx]);
     } catch (e) {
       _applyChapterText(idx, '$_failedPrefix ${e.toString()}');
     } finally {
       if (foreground) {
         chapterLoading = false;
-        notifyListeners();
+        _safeNotify();
       }
     }
   }
@@ -211,7 +223,7 @@ class ReaderState extends ChangeNotifier {
     chapterStartChars = List<int>.filled(chapters.length, 0);
     for (int i = 0; i < chapters.length; i++) {
       chapterStartChars[i] = acc;
-      acc += chapters[i].text.length + 1; // +1 对应换行
+      acc += chapters[i].text.length;
     }
     totalChars = acc;
   }
@@ -232,7 +244,7 @@ class ReaderState extends ChangeNotifier {
     if (_layoutKey != key) {
       _layoutKey = key;
       _layouts.clear();
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -294,7 +306,7 @@ class ReaderState extends ChangeNotifier {
       // 正文按需加载：加载完成后 notify 界面重排（前台加载显示进度）
       _ensureChapterLoaded(currentChapter, foreground: true);
     }
-    notifyListeners();
+    _safeNotify();
   }
 
   double get percent {
@@ -320,7 +332,7 @@ class ReaderState extends ChangeNotifier {
       ..lastReadAt = DateTime.now().millisecondsSinceEpoch
       ..finished = percent >= 99.5;
     _saveDebounced();
-    notifyListeners();
+    _safeNotify(pageOnly: true);
   }
 
   Future<void> saveNow() async {
@@ -366,14 +378,14 @@ class ReaderState extends ChangeNotifier {
     final id = await _db.insertBookmark(bm);
     if (id > 0) {
       bookmarks = await _db.bookmarksOf(book.id!);
-      notifyListeners();
+      _safeNotify();
     }
   }
 
   Future<void> removeBookmark(int id) async {
     await _db.deleteBookmark(id);
     bookmarks = await _db.bookmarksOf(book.id!);
-    notifyListeners();
+    _safeNotify();
   }
 
   /// 当前页是否已有书签（按章+偏移近似匹配）。
@@ -385,7 +397,24 @@ class ReaderState extends ChangeNotifier {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 退到后台时立刻落盘：这是系统回收进程前唯一的保存机会
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      saveNow();
+    }
+  }
+
+  void _safeNotify({bool pageOnly = false}) {
+    lastChangePageOnly = pageOnly;
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
   void dispose() {
+    _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     saveNow();
     super.dispose();
   }

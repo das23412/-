@@ -20,16 +20,9 @@ enum _Phase { idle, downloading }
 class _LinkImportPageState extends State<LinkImportPage> {
   final _urlController = TextEditingController();
   final _progressThrottler = ProgressThrottler();
-  bool _allowNetwork = false;
   bool _busy = false; // 探测或下载中
   int _received = 0;
   int _total = -1; // -1 = 未知大小
-
-  @override
-  void initState() {
-    super.initState();
-    _allowNetwork = AppSettings.instance.allowNetworkDownload;
-  }
 
   @override
   void dispose() {
@@ -38,8 +31,8 @@ class _LinkImportPageState extends State<LinkImportPage> {
   }
 
   Future<void> _toggleNetwork(bool v) async {
-    setState(() => _allowNetwork = v);
     AppSettings.instance.allowNetworkDownload = v;
+    setState(() {});
   }
 
   Future<void> _paste() async {
@@ -55,7 +48,7 @@ class _LinkImportPageState extends State<LinkImportPage> {
     final lib = context.read<LibraryState>();
     final url = _urlController.text.trim();
 
-    if (!_allowNetwork) {
+    if (!AppSettings.instance.allowNetworkDownload) {
       _snack('请先打开「允许联网下载」开关');
       return;
     }
@@ -183,7 +176,7 @@ class _LinkImportPageState extends State<LinkImportPage> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: SwitchListTile(
-                value: _allowNetwork,
+                value: AppSettings.instance.allowNetworkDownload,
                 onChanged: _busy ? null : (v) => _toggleNetwork(v),
                 title: const Text('允许联网下载'),
                 subtitle: const Text('默认关闭。关闭时墨阅不发起任何网络请求；'

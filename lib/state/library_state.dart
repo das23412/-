@@ -270,10 +270,12 @@ class LibraryState extends ChangeNotifier {
     var name = hint.name;
     var author = hint.author;
     var coverUrl = hint.coverUrl;
-    final source = await BookSource.findById(hint.sourceId);
+    // 书源联网开关关闭时跳过详情页请求，直接用搜索结果字段
+    final source =
+        settings.allowSources ? await BookSource.findById(hint.sourceId) : null;
     if (source != null) {
       try {
-        // 详情页失败不致命：直接用搜索结果字段
+        // 详情页失败不致命：继续用搜索结果的信息
         final info = await SourceService.bookInfo(source, hint);
         name = info.book.name;
         author = info.book.author;

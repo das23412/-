@@ -30,6 +30,18 @@ String formatBytes(int bytes) {
 /// 中文时间描述：刚刚 / N分钟前 / 今天 HH:mm / 昨天 / N天前 / 日期。
 String formatTimeCN(int ms) {
   if (ms <= 0) return '未读过';
+  return _formatDay(ms);
+}
+
+/// 绝对日期时间（如书籍添加时间，语义与"最近阅读"不同）。
+String formatDateTimeCN(int ms) {
+  if (ms <= 0) return '—';
+  final d = DateTime.fromMillisecondsSinceEpoch(ms);
+  final two = (int v) => v.toString().padLeft(2, '0');
+  return '${d.year}/${d.month}/${d.day} ${two(d.hour)}:${two(d.minute)}';
+}
+
+String _formatDay(int ms) {
   final d = DateTime.fromMillisecondsSinceEpoch(ms);
   final now = DateTime.now();
   final diff = now.difference(d);

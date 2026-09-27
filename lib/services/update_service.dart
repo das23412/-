@@ -46,9 +46,13 @@ class UpdateService {
   static String normalizeVersion(String tag) =>
       tag.trim().replaceFirst(RegExp(r'^[vV]\s*'), '');
 
-  /// 语义化版本比较：a > b 返回 1，相等 0，a < b 返回 -1。
+  /// 语义化版本比较：a > b 返回 1，相等 0，a < b -1。
+  /// 忽略 pre-release 后缀（1.2.1-beta 按 1.2.1 参与比较）与构建号；
+  /// pre-release 不推送给正式用户，beta 用户升级正式版视为升级。
   static int compareVersions(String a, String b) {
     List<int> parse(String s) => s
+        .split('-')[0]
+        .split('+')[0]
         .split('.')
         .map((e) => int.tryParse(e.trim()) ?? 0)
         .toList();
@@ -61,6 +65,10 @@ class UpdateService {
     }
     return 0;
   }
+
+  /// GitHub 资产 digest（"sha256:xxx"）归一化为十六进制串。
+  static String normalizeDigest(String raw) =>
+      raw.startsWith('sha256:') ? raw.substring(7) : raw;
 
   /// 检查最新版本。返回 null 表示已是最新；失败抛 [UpdateException]。
   static Future<UpdateInfo?> checkLatest(String currentVersion) async {
@@ -95,14 +103,21 @@ class UpdateService {
       if (apk == null) {
         throw const UpdateException('最新版本没有附带 APK 文件');
       }
-      final rawDigest = (apk['digest'] as String?) ?? '';
+      final downloadUrl = (apk['browser_download_url'] as String?) ?? '';
+      if (downloadUrl.isEmpty) {
+        throw const UpdateException('Release 数据异常（缺少下载地址）');
+      }
+      // 只允许官方 Release 附件地址，防止 Release 数据被篡改后指向外部
+      if (!downloadUrl.startsWith('https://github.com/') &&
+          !downloadUrl.startsWith('https://objects.githubusercontent.com/')) {
+        throw const UpdateException('下载地址非官方来源，已阻止');
+      }
       return UpdateInfo(
         version: latest,
-        downloadUrl: apk['browser_download_url'] as String,
+        downloadUrl: downloadUrl,
         size: (apk['size'] as num?)?.toInt() ?? -1,
         releaseNotes: (json['body'] as String?)?.trim(),
-        sha256:
-            rawDigest.startsWith('sha256:') ? rawDigest.substring(7) : '',
+        sha256: normalizeDigest((apk['digest'] as String?) ?? ''),
       );
     } on TimeoutException {
       throw const UpdateException('连接超时（GitHub 访问不稳定，稍后再试）');
@@ -124,10 +139,19 @@ class UpdateService {
     void Function(int received, int total)? onProgress,
     String? expectedSha256,
   }) async {
+    // 版本号可能来自 tag（理论可含 / 等非法字符），净化出安全文件名
+    final safeVersion = version.replaceAll(RegExp(r'[^0-9A-Za-z._-]'), '_');
     final support = await getApplicationSupportDirectory();
     final dir = Directory(p.join(support.path, 'updates'));
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    final dest = p.join(dir.path, 'moyue_v$version.apk');
+    final dest = p.join(dir.path, 'moyue_v$safeVersion.apk');
+    // 清理历史版本的安装包与中断残留（每个 APK 数十 MB，不清理会永久占空间）
+    for (final old in dir.listSync()) {
+      if (old.path == dest) continue;
+      try {
+        old.deleteSync();
+      } catch (_) {}
+    }
 
     final client = HttpClient();
     File? tmp;
@@ -146,7 +170,8 @@ class UpdateService {
       final sink = tmp.openWrite();
       int received = 0;
       try {
-        await for (final chunk in resp) {
+        // 响应体逐块超时：服务器中途停滞不会永久挂起
+        await for (final chunk in resp.timeout(const Duration(seconds: 30))) {
           received += chunk.length;
           if (received > maxBytes) throw const UpdateException('安装包超过 500MB 上限');
           sink.add(chunk);

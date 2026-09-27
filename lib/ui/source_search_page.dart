@@ -44,17 +44,10 @@ class SourceSearchPage extends StatefulWidget {
 
 class _SourceSearchPageState extends State<SourceSearchPage> {
   final _keywordController = TextEditingController(text: '我的');
-  bool _allowSources = false;
   bool _searching = false;
   List<_AggregatedBook> _results = [];
   int _failedCount = 0;
   String _statusText = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _allowSources = AppSettings.instance.allowSources;
-  }
 
   @override
   void dispose() {
@@ -63,8 +56,8 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   }
 
   Future<void> _toggleNetwork(bool v) async {
-    setState(() => _allowSources = v);
     AppSettings.instance.allowSources = v;
+    setState(() {});
   }
 
   Future<void> _search() async {
@@ -183,7 +176,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: SwitchListTile(
-                value: _allowSources,
+                value: AppSettings.instance.allowSources,
                 onChanged: _searching ? null : _toggleNetwork,
                 title: const Text('允许书源联网'),
                 subtitle: const Text('默认关闭。关闭时不发起任何网络请求。'),
@@ -208,7 +201,10 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
-                    onPressed: (!_allowSources || _searching) ? null : _search,
+                    onPressed:
+                        (!AppSettings.instance.allowSources || _searching)
+                            ? null
+                            : _search,
                     icon: _searching
                         ? const SizedBox(
                             width: 16,

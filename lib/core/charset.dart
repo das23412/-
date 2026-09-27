@@ -33,10 +33,20 @@ class CharsetDecoder {
       if (zeroEven > 28) return _decodeUtf16(bytes, littleEndian: false);
       if (zeroOdd > 28) return _decodeUtf16(bytes, littleEndian: true);
     }
-    // UTF-8 严格解码失败则按 GBK 解码
+    // UTF-8 严格解码失败：先尝试容忍解码（单字节损坏只产生个别替换符），
+    // 替换率低于阈值才采用；否则整本回退 GBK，避免一本书毁于一处坏字节
     try {
       return utf8.decode(bytes);
     } on FormatException {
+      final lenient = utf8.decode(bytes, allowMalformed: true);
+      int bad = 0;
+      final runesList = lenient.runes.toList();
+      for (final r in runesList) {
+        if (r == 0xFFFD) bad++;
+      }
+      if (runesList.isNotEmpty && bad / runesList.length < 0.005) {
+        return lenient;
+      }
       return decodeGbk(bytes);
     }
   }

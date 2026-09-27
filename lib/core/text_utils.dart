@@ -18,8 +18,8 @@ class TextUtils {
             r'</?(p|div|section|article|br|li|h[1-6]|tr|blockquote|body|html|header|footer|nav|aside|main|ul|ol|table|dl|dd|dt|figcaption|figure|pre|center)[^>]*/?>',
             caseSensitive: false),
         '\n');
-    // 剩余标签全部去掉
-    s = s.replaceAll(RegExp(r'<[^>]+>'), '');
+    // 剩余标签全部去掉（内联标签删除补空格，避免英文相邻词粘连）
+    s = s.replaceAll(RegExp(r'<[^>]+>'), ' ');
     s = decodeEntities(s);
     // 规整空白与空行
     final lines = s
@@ -41,37 +41,40 @@ class TextUtils {
   }
 
   /// 解码常见 HTML 实体。
+  ///
+  /// 单遍正则扫描 + 查表替换：旧实现逐个实体 replaceAll，
+  /// `&amp;lt;` 会被双重解码成 `<`。
   static String decodeEntities(String s) {
     const named = {
-      '&amp;': '&',
-      '&lt;': '<',
-      '&gt;': '>',
-      '&quot;': '"',
-      '&apos;': "'",
-      '&nbsp;': ' ',
-      '&mdash;': '—',
-      '&hellip;': '…',
-      '&ldquo;': '“',
-      '&rdquo;': '”',
-      '&lsquo;': '‘',
-      '&rsquo;': '’',
-      '&copy;': '©',
-      '&reg;': '®',
-      '&trade;': '™',
+      'amp': '&',
+      'lt': '<',
+      'gt': '>',
+      'quot': '"',
+      'apos': "'",
+      'nbsp': ' ',
+      'mdash': '—',
+      'hellip': '…',
+      'ldquo': '“',
+      'rdquo': '”',
+      'lsquo': '‘',
+      'rsquo': '’',
+      'copy': '©',
+      'reg': '®',
+      'trade': '™',
     };
-    named.forEach((k, v) {
-      s = s.replaceAll(k, v);
+    return s.replaceAllMapped(RegExp(r'&(#[xX]?[0-9a-fA-F]+|[a-zA-Z]+);'),
+        (m) {
+      final body = m.group(1)!;
+      if (body.startsWith('#')) {
+        final isHex = body[1] == 'x' || body[1] == 'X';
+        final code = int.tryParse(
+            isHex ? body.substring(2) : body.substring(1),
+            radix: isHex ? 16 : 10);
+        if (code == null || code < 0 || code > 0x10FFFF) return m.group(0)!;
+        return String.fromCharCode(code);
+      }
+      return named[body] ?? m.group(0)!;
     });
-    // 数字实体
-    s = s.replaceAllMapped(RegExp(r'&#x([0-9a-fA-F]+);'), (m) {
-      final code = int.tryParse(m.group(1)!, radix: 16);
-      return code == null ? m.group(0)! : String.fromCharCode(code);
-    });
-    s = s.replaceAllMapped(RegExp(r'&#(\d+);'), (m) {
-      final code = int.tryParse(m.group(1)!);
-      return code == null ? m.group(0)! : String.fromCharCode(code);
-    });
-    return s;
   }
 
   /// 清理书名（通常来自文件名）：去掉扩展名、书站后缀、多余空白。

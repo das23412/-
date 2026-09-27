@@ -31,8 +31,10 @@ class RuleEngine {
   // ---------- 对外入口 ----------
 
   /// 执行规则取一个字符串（多结果用换行连接，属性类取第一个命中）。
-  /// 先按 `||` 切分兜底分支，再在每个分支内处理 `##` 后处理，
-  /// 全部分支都需要 JS/XPath 时抛 [SourceUnsupportedException]。
+  /// 优先级：先按 `||` 切分兜底分支；每个分支内可含 `&&`（各部分结果换行合并，
+  /// 空部分跳过）；每个分支/部分独立处理 `##` 后处理。规则非法（坏选择器/
+  /// 坏正则）视为空并继续兜底；全部分支都需要 JS/XPath 时抛
+  /// [SourceUnsupportedException]。
   static String? evalString(
     String rule, {
     Element? root,
@@ -41,19 +43,27 @@ class RuleEngine {
   }) {
     var sawUnsupported = false;
     for (final alt in rule.split('||')) {
-      final parts = _splitPostProcess(alt);
-      final a = parts.base.trim();
-      if (a.isEmpty) continue;
-      String? r;
-      try {
-        r = _evalAlternative(a, root: root, json: json, baseUrl: baseUrl);
-      } on SourceUnsupportedException {
-        sawUnsupported = true;
-        continue; // 该分支需要 JS/XPath，尝试下一条兜底规则
+      final joined = <String>[];
+      var sawUnsupportedInAlt = false;
+      for (final part in alt.split('&&')) {
+        final p = _splitPostProcess(part);
+        final a = p.base.trim();
+        if (a.isEmpty) continue;
+        String? r;
+        try {
+          r = _evalAlternative(a, root: root, json: json, baseUrl: baseUrl);
+        } on SourceUnsupportedException {
+          sawUnsupportedInAlt = true;
+          continue; // 该部分需要 JS/XPath
+        } on FormatException {
+          continue; // 该部分规则非法（坏选择器/坏正则）：视为空
+        }
+        if (r != null && r.trim().isNotEmpty) {
+          joined.add(_applyRegex(r.trim(), p.match, p.replace));
+        }
       }
-      if (r != null && r.trim().isNotEmpty) {
-        return _applyRegex(r.trim(), parts.match, parts.replace);
-      }
+      if (joined.isNotEmpty) return joined.join('\n');
+      if (sawUnsupportedInAlt) sawUnsupported = true;
     }
     if (sawUnsupported) {
       throw const SourceUnsupportedException('该规则需要执行 JS 或 XPath，暂不支持');
@@ -62,21 +72,30 @@ class RuleEngine {
   }
 
   /// 执行列表规则（bookList / chapterList），返回元素或 JSON 值列表。
-  /// 所有分支都需要 JS/XPath 时抛 [SourceUnsupportedException]。
+  /// `&&` 拼接各部分的列表；规则非法视为空；全部分支需要 JS/XPath 时抛
+  /// [SourceUnsupportedException]。
   static List<RuleNode> evalList(String rule, {Element? root, dynamic json}) {
     var sawUnsupported = false;
     for (final alt in rule.split('||')) {
-      final parts = _splitPostProcess(alt);
-      final a = parts.base.trim();
-      if (a.isEmpty) continue;
-      List<RuleNode> nodes;
-      try {
-        nodes = _evalListAlternative(a, root: root, json: json);
-      } on SourceUnsupportedException {
-        sawUnsupported = true;
-        continue;
+      final collected = <RuleNode>[];
+      var sawUnsupportedInAlt = false;
+      for (final part in alt.split('&&')) {
+        final p = _splitPostProcess(part);
+        final a = p.base.trim();
+        if (a.isEmpty) continue;
+        List<RuleNode> nodes;
+        try {
+          nodes = _evalListAlternative(a, root: root, json: json);
+        } on SourceUnsupportedException {
+          sawUnsupportedInAlt = true;
+          continue;
+        } on FormatException {
+          continue;
+        }
+        collected.addAll(nodes);
       }
-      if (nodes.isNotEmpty) return nodes;
+      if (collected.isNotEmpty) return collected;
+      if (sawUnsupportedInAlt) sawUnsupported = true;
     }
     if (sawUnsupported) {
       throw const SourceUnsupportedException('该规则需要执行 JS 或 XPath，暂不支持');
@@ -428,7 +447,8 @@ class RuleEngine {
     return cur;
   }
 
-  /// JSONPath 子集：`$.a.b`、`[N]`、`[*]`。返回命中的所有值。
+  /// JSONPath 子集：`$.a.b`、`[N]`、`[*]`、`$..key`（递归下降）。
+  /// 返回命中的所有值。
   static List<dynamic> _walkJsonPath(dynamic root, String path) {
     var p = path.trim();
     if (p.startsWith('\$')) p = p.substring(1);
@@ -437,6 +457,17 @@ class RuleEngine {
     while (i < p.length) {
       final c = p[i];
       if (c == '.') {
+        // '..key' = 递归下降
+        if (i + 1 < p.length && p[i + 1] == '.') {
+          var j = i + 2;
+          while (j < p.length && p[j] != '.' && p[j] != '[') {
+            j++;
+          }
+          final key = p.substring(i + 2, j);
+          if (key.isNotEmpty) tokens.add(_JsonToken.recursive(key));
+          i = j;
+          continue;
+        }
         var j = i + 1;
         while (j < p.length && p[j] != '.' && p[j] != '[') {
           j++;
@@ -466,7 +497,24 @@ class RuleEngine {
     if (i == tokens.length) return [value];
     final t = tokens[i];
     final out = <dynamic>[];
-    if (t.isAll) {
+    if (t.recursiveKey != null) {
+      void collect(dynamic v) {
+        if (v is Map) {
+          v.forEach((k, val) {
+            if (k == t.recursiveKey) {
+              out.addAll(_walkJson(val, tokens, i + 1));
+            }
+            collect(val);
+          });
+        } else if (v is List) {
+          for (final item in v) {
+            collect(item);
+          }
+        }
+      }
+
+      collect(value);
+    } else if (t.isAll) {
       if (value is List) {
         for (final v in value) {
           out.addAll(_walkJson(v, tokens, i + 1));
@@ -614,14 +662,21 @@ class _JsonToken {
   final bool isAll;
   const _JsonToken.key(this.key)
       : index = null,
-        isAll = false;
+        isAll = false,
+        recursiveKey = null;
   const _JsonToken.index(this.index)
       : key = null,
-        isAll = false;
+        isAll = false,
+        recursiveKey = null;
   const _JsonToken.all()
       : key = null,
         index = null,
-        isAll = true;
+        isAll = true,
+        recursiveKey = null;
+  const _JsonToken.recursive(this.recursiveKey)
+      : key = null,
+        index = null,
+        isAll = false;
 }
 
 /// 规则结果的 JSON 值转字符串（Map/List 序列化为 JSON 文本）。

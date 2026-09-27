@@ -55,23 +55,17 @@ class MobiParser {
       final textEncoding = r0.getUint32(28);
       encodingName =
           textEncoding == 1252 ? 'windows1252' : (textEncoding == 65001 ? 'utf8' : 'gbk');
-      // extra data flags 位于 MOBI 头内偏移 0xF2
-      if (mobiHeaderLen >= 0xF2 + 2 && rec0.length >= 16 + 0xF2 + 4) {
-        extraFlags = r0.getUint32(16 + 0xF2);
+      // extra data flags：2 字节，位于 record0 偏移 16+0xF2（MOBI 头内 0xF2）
+      if (mobiHeaderLen >= 0xF2 + 2 && rec0.length >= 16 + 0xF2 + 2) {
+        extraFlags = r0.getUint16(16 + 0xF2);
       }
     }
 
     // 简易 Latin-1（兼容 western 1252 主体区间）
-    String decodeBytes(List<int> b) {
-      if (encodingName == 'utf8') return CharsetDecoder.decode(b);
-      if (encodingName == 'windows1252') {
-        return b.map((e) => String.fromCharCode(e)).join();
-      }
-      return CharsetDecoder.decode(b);
-    }
-
-    // 文本记录：1 .. textRecordCount
-    final buf = StringBuffer();
+    // 文本记录是连续字节流按 4KB 切分的片段：必须先收集全部字节、
+    // 最后整体解码一次。逐记录解码会把跨越边界的多字节汉字切碎，
+    // 解码失败后整条记录回退 GBK，产生成段乱码。
+    final allBytes = BytesBuilder(copy: false);
     for (int i = 1; i <= textRecordCount && i < numRecords; i++) {
       List<int> rec = bytes.sublist(recordOffsets[i], recordOffsets[i + 1]);
       switch (compression) {
@@ -79,39 +73,47 @@ class MobiParser {
           break;
         case 2: // PalmDOC
           rec = PalmDoc.decompress(rec);
+          break;
         case 17480: // HUFF/CDIC
           throw const MobiUnsupportedException();
         default:
           throw const FormatException('未知的 MOBI 压缩方式');
       }
       rec = _trimTrailing(rec, extraFlags);
-      buf.write(decodeBytes(rec));
+      allBytes.add(rec);
     }
-
-    final html = buf.toString();
+    final rawBytes = allBytes.takeBytes();
+    final String html;
+    if (encodingName == 'windows1252') {
+      html = rawBytes.map((e) => String.fromCharCode(e)).join();
+    } else {
+      html = CharsetDecoder.decode(rawBytes);
+    }
     if (html.trim().isEmpty) throw const FormatException('MOBI 没有可读的正文');
 
-    // MOBI 正文是 HTML：按 <mbp:pagebreak/> 或 <hrdbreak> 切章，去标签后按标题识别
-    final rawSections =
-        html.split(RegExp(r'<\s*mbp:pagebreak\s*/?\s*>|<\s*hr\s*/?\s*>',
-            caseSensitive: false));
-    final plain = rawSections
-        .map((s) => _stripToText(s))
-        .where((s) => s.trim().isNotEmpty)
-        .toList();
-    if (plain.isEmpty) throw const FormatException('MOBI 没有可读的正文');
-
-    // 切章逻辑复用 TXT 的标题识别
-    final title = file.uri.pathSegments.last;
-    final joined = plain.join('\n');
+    // MOBI 正文是 HTML：pagebreak/hr 视作段落边界（占位换行），整体去标签
+    // （旧实现按 pagebreak 切 section 再 join 拼回，切分对结果无影响，白跑一轮）
+    final normalized = html.replaceAll(
+        RegExp(r'<\s*mbp:pagebreak\s*/?\s*>|<\s*hr\s*/?\s*>',
+            caseSensitive: false),
+        '\n');
+    final joined = _stripToText(normalized);
+    if (joined.trim().isEmpty) throw const FormatException('MOBI 没有可读的正文');
     final chapters = _splitMobiChapters(joined);
-    return ParsedBook(chapters.isEmpty ? [_fallback(title, joined)] : chapters);
+    return ParsedBook(chapters.isEmpty
+        ? [_fallback(file.uri.pathSegments.last, joined)]
+        : chapters);
   }
 
   static ParsedChapter _fallback(String title, String text) =>
       ParsedChapter(title, text);
 
   /// MOBI 正文切章：对每一段的第一行做章节标题识别。
+  /// 正则提升为常量：逐行循环里每次新建 RegExp 是纯浪费。
+  static final RegExp _chapterMarkCn =
+      RegExp(r'^第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷部篇]');
+  static final RegExp _chapterMarkEn = RegExp(r'^chapter\s+\d+', caseSensitive: false);
+
   static List<ParsedChapter> _splitMobiChapters(String text) {
     // 动态导入会导致循环依赖，这里复制精简版判断
     final lines = text.split('\n');
@@ -119,10 +121,9 @@ class MobiParser {
     for (int i = 0; i < lines.length; i++) {
       final t = lines[i].trim();
       if (t.isEmpty || t.length > 50) continue;
-      if (t.startsWith('第') &&
-          RegExp(r'^第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷部篇]').hasMatch(t)) {
+      if (t.startsWith('第') && _chapterMarkCn.hasMatch(t)) {
         marks.add(i);
-      } else if (RegExp(r'^chapter\s+\d+', caseSensitive: false).hasMatch(t)) {
+      } else if (_chapterMarkEn.hasMatch(t)) {
         marks.add(i);
       }
     }
@@ -156,26 +157,46 @@ class MobiParser {
   }
 
   /// 去除记录尾部的 extra data（trailing entries + multibyte overlap）。
+  ///
+  /// 语义参照 DeDRM_tools 的 mobidedrm.py：
+  /// - bit 0 = multibyte overlap：末字节低 2 位 + 1 个字节，先于其他条目裁剪；
+  /// - bit 1..15：每个置位的 bit 对应一个 trailing entry，按 bit 从低到高的顺序
+  ///   从尾部裁剪。每个 entry 的大小以"反向变长整数"编码存在尾部：
+  ///   从末尾向前逐字节读，低 7 位为一组、越早读到的字节位权越高
+  ///   （即存储时最高位组离尾部最远），最高位字节为 1 表示变长整数结束；
+  ///   解码出的值 = entry 数据字节数，裁剪量 = 变长整数本身字节数 + 值。
   static List<int> _trimTrailing(List<int> data, int flags) {
     if (flags == 0 || data.isEmpty) return data;
     var end = data.length;
-    int trailingSize(List<int> d, int len) {
-      int n = 0;
-      for (int i = len - 1; i >= 0; i--) {
-        if (d[i] & 0x80 != 0) break;
-        n++;
-      }
-      return n;
-    }
 
-    for (int bit = 1; bit < 16; bit++) {
-      if (flags & (1 << bit) != 0) {
-        end -= trailingSize(data, end);
-        if (end < 0) return data;
-      }
-    }
+    // bit 0：multibyte overlap，位于最末尾
     if (flags & 1 != 0 && end > 0) {
       end -= (data[end - 1] & 0x3) + 1;
+      if (end < 0) return data;
+    }
+
+    // bit 1..15：按从低到高的顺序处理每个置位 bit
+    for (int bit = 1; bit < 16; bit++) {
+      if (flags & (1 << bit) == 0) continue;
+      // 反向变长整数：从当前末尾向前读（规格上限 4 字节）
+      int numbytes = 0;
+      int bits = 0;
+      while (true) {
+        final idx = end - 1 - numbytes;
+        if (idx < 0 || numbytes >= 4) return data; // 数据异常：放弃裁剪
+        numbytes++;
+        bits += 7;
+        if (data[idx] & 0x80 != 0) {
+          bits -= 7;
+          break;
+        }
+      }
+      int value = 0;
+      for (int n2 = 0; n2 < numbytes; n2++) {
+        value += (data[end - 1 - n2] & 0x7F) << bits;
+        bits -= 7;
+      }
+      end -= numbytes + value;
       if (end < 0) return data;
     }
     return data.sublist(0, end);

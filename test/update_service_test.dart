@@ -27,5 +27,19 @@ void main() {
       expect(UpdateService.compareVersions('1.2.9', '1.3.0'), -1);
       expect(UpdateService.compareVersions('0.9.0', '1.0.0'), -1);
     });
+
+    test('pre-release 后缀不参与比较（beta 不误导正式用户）', () {
+      expect(UpdateService.compareVersions('1.2.1-beta', '1.2.0'), 1);
+      expect(UpdateService.compareVersions('1.2.1-beta', '1.2.1'), 0);
+      expect(UpdateService.compareVersions('1.2.1', '1.2.1-beta.2'), 0);
+    });
+  });
+
+  group('digest 归一化', () {
+    test('剥离 sha256: 前缀', () {
+      expect(UpdateService.normalizeDigest('sha256:abc123'), 'abc123');
+      expect(UpdateService.normalizeDigest(''), '');
+      expect(UpdateService.normalizeDigest('deadbeef'), 'deadbeef');
+    });
   });
 }

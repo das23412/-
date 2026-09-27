@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -15,9 +17,26 @@ import 'ui/reader_page.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await AppSettings.instance.init();
+void main() {
+  // 全局异常边界：任何未捕获异常只记录，不让应用白屏
+  runZonedGuarded(() {
+    WidgetsFlutterBinding.ensureInitialized();
+    FlutterError.onError = (details) {
+      FlutterError.presentError(details);
+    };
+    _startApp();
+  }, (error, stack) {
+    debugPrint('未捕获异常：$error\n$stack');
+  });
+}
+
+Future<void> _startApp() async {
+  try {
+    await AppSettings.instance.init();
+  } catch (e) {
+    // 设置初始化失败不白屏：使用默认值继续
+    debugPrint('设置初始化失败，使用默认值继续：$e');
+  }
   runApp(const MoyueApp());
 }
 
@@ -92,6 +111,12 @@ class _GatePageState extends State<GatePage> {
       await _openImported(path);
     });
 
+    // 1.5 启动即带文件打开：优先于权限弹窗/首扫确认，避免打断用户的直接意图
+    if (intentPath != null && mounted) {
+      await context.read<LibraryState>().reload();
+      await _openImported(intentPath);
+    }
+
     // 2. 存储权限（仅用于全盘扫描；拒绝也不影响手动导入）
     final settings = AppSettings.instance;
     final manage = await Permission.manageExternalStorage.status;
@@ -132,18 +157,12 @@ class _GatePageState extends State<GatePage> {
         context.read<LibraryState>().scan(fullScan: true);
       }
     }
-
-    // 4. 启动即带文件打开
-    if (intentPath != null && mounted) {
-      await context.read<LibraryState>().reload();
-      await _openImported(intentPath);
-    }
   }
 
   Future<void> _openImported(String path) async {
     final book = await AppDb.instance.bookByPath(path);
     final ctx = navigatorKey.currentContext;
-    if (book == null || !ctx!.mounted) return;
+    if (book == null || ctx == null || !ctx.mounted) return;
     Navigator.of(ctx).push(
       MaterialPageRoute(builder: (_) => ReaderPage(book: book)),
     );

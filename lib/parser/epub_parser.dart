@@ -17,19 +17,33 @@ class EpubParser {
       throw const FormatException('EPUB 文件损坏，无法解压');
     }
 
-    // 文件名 → 条目 索引（原文名 + 小写兜底）。旧实现每次查找都
+    // 文件名 → 条目 索引（原文名 + 小写兜底 + 解码名兜底）。旧实现每次查找都
     // 线性扫描全部条目，长 spine 的 EPUB 会退化成 O(条目数 × 章节数)。
     final byName = <String, ArchiveFile>{};
+    String safeDecode(String s) {
+      try {
+        return Uri.decodeComponent(s);
+      } catch (_) {
+        return s;
+      }
+    }
+
     for (final f in archive.files) {
       byName.putIfAbsent(f.name, () => f);
       byName.putIfAbsent(f.name.toLowerCase(), () => f);
+      final decoded = safeDecode(f.name);
+      if (decoded != f.name) {
+        byName.putIfAbsent(decoded, () => f);
+        byName.putIfAbsent(decoded.toLowerCase(), () => f);
+      }
     }
 
     ArchiveFile? find(String path) {
       final p = path.replaceAll('\\', '/');
       return byName[p] ??
           byName[p.replaceFirst('/', '')] ??
-          byName[p.toLowerCase()];
+          byName[p.toLowerCase()] ??
+          byName[safeDecode(p).toLowerCase()];
     }
 
     String readText(String path) {
@@ -161,6 +175,11 @@ class EpubParser {
   static String _normalizeSrc(String src) {
     var s = src.replaceAll('\\', '/').split('#').first;
     if (s.startsWith('./')) s = s.substring(2);
+    // OPF 里的 href 可能带百分号编码（chapter%20one.xhtml），ZIP 条目名是解码后的
+    try {
+      final decoded = Uri.decodeComponent(s);
+      if (decoded != s) s = decoded;
+    } catch (_) {}
     return s;
   }
 

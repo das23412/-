@@ -108,9 +108,14 @@ class ReaderConfig extends ChangeNotifier {
       final doc = await getApplicationDocumentsDirectory();
       final dir = Directory(p.join(doc.path, 'backgrounds'));
       if (!dir.existsSync()) dir.createSync(recursive: true);
-      final dest =
-          p.join(dir.path, 'custom_bg${p.extension(path).toLowerCase()}');
+      // 文件名带时间戳：二次导入同格式图片时路径变化，
+      // 否则 FileImage 按路径相等性命中旧缓存，界面一直显示旧背景
+      final dest = p.join(dir.path,
+          'custom_bg_${DateTime.now().millisecondsSinceEpoch}${p.extension(path).toLowerCase()}');
       await File(path).copy(dest);
+      // 旧的固定名背景文件清理（历史版本写入的）
+      final legacy = File(p.join(dir.path, 'custom_bg.jpg'));
+      if (legacy.existsSync()) legacy.deleteSync();
       settings.customBgPath = dest;
       settings.bgIndex = -1;
       notifyListeners();

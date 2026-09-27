@@ -18,9 +18,11 @@ class _FoldersPageState extends State<FoldersPage> {
     final dir = await FilePicker.platform.getDirectoryPath(dialogTitle: '选择要扫描的文件夹');
     if (dir == null) return;
     final settings = AppSettings.instance;
+    // 归一化尾部分隔符再查重，避免 '/a/b' 与 '/a/b/' 重复添加
+    final normalized = dir.endsWith('/') ? dir.substring(0, dir.length - 1) : dir;
     final list = settings.scanFolders;
-    if (!list.contains(dir)) {
-      list.add(dir);
+    if (!list.contains(normalized)) {
+      list.add(normalized);
       await settings.setScanFolders(list);
     }
     if (mounted) setState(() {});
@@ -28,7 +30,8 @@ class _FoldersPageState extends State<FoldersPage> {
 
   Future<void> _removeFolder(String path) async {
     final settings = AppSettings.instance;
-    final list = settings.scanFolders..remove(path);
+    // getter 返回的是缓存列表的引用：先复制再改，避免持久化失败时内存已脏
+    final list = List<String>.from(settings.scanFolders)..remove(path);
     await settings.setScanFolders(list);
     if (mounted) setState(() {});
   }
@@ -82,9 +85,10 @@ class _FoldersPageState extends State<FoldersPage> {
           FilledButton.icon(
             onPressed: widget.library.scanning
                 ? null
-                : () async {
-                    await widget.library.scan(fullScan: false);
-                    if (context.mounted) Navigator.pop(context);
+                : () {
+                    // 先返回书架再扫描：扫描进度横幅就在书架顶部，无需在本页干等
+                    Navigator.pop(context);
+                    widget.library.scan(fullScan: false);
                   },
             icon: const Icon(Icons.manage_search),
             label: const Text('立即扫描这些文件夹'),
@@ -93,9 +97,9 @@ class _FoldersPageState extends State<FoldersPage> {
           OutlinedButton.icon(
             onPressed: widget.library.scanning
                 ? null
-                : () async {
-                    await widget.library.scan(fullScan: true);
-                    if (context.mounted) Navigator.pop(context);
+                : () {
+                    Navigator.pop(context);
+                    widget.library.scan(fullScan: true);
                   },
             icon: const Icon(Icons.travel_explore),
             label: const Text('全盘重新扫描（含 SD 卡/U 盘）'),

@@ -55,10 +55,17 @@ class SourceState extends ChangeNotifier {
     }
   }
 
-  /// 导入一段书源文本，返回摘要信息。
+  /// 导入一段书源文本，返回摘要信息。单条写入失败不影响其余。
   Future<String> importText(String text) async {
     final errors = <String>[];
-    final parsed = BookSource.parseMany(text, errors: errors);
+    List<BookSource> parsed;
+    try {
+      parsed = BookSource.parseMany(text, errors: errors);
+    } catch (e) {
+      importSummary = '书源解析失败：$e';
+      notifyListeners();
+      return importSummary;
+    }
     if (parsed.isEmpty) {
       importSummary = errors.isEmpty
           ? '没有解析到任何书源，请检查格式'
@@ -66,22 +73,30 @@ class SourceState extends ChangeNotifier {
       notifyListeners();
       return importSummary;
     }
+    // Set 查重：已存在的书源保留启用状态（覆盖更新规则内容）
+    final existingEnabled = <String, bool>{
+      for (final s in sources) s.id: s.enabled,
+    };
     final now = DateTime.now().millisecondsSinceEpoch;
+    var failed = 0;
     for (final s in parsed) {
-      // 已存在的书源保留启用状态（覆盖更新规则内容）
-      final existing = byId(s.id);
-      await _db.upsertSource(
-        id: s.id,
-        name: s.name,
-        group: s.group,
-        enabled: existing?.enabled ?? true,
-        raw: s.rawJson,
-        addedAt: now,
-      );
+      try {
+        await _db.upsertSource(
+          id: s.id,
+          name: s.name,
+          group: s.group,
+          enabled: existingEnabled[s.id] ?? true,
+          raw: s.rawJson,
+          addedAt: now,
+        );
+      } catch (_) {
+        failed++;
+      }
     }
     await reload();
     importSummary = '成功导入 ${parsed.length} 个书源'
-        '${errors.isEmpty ? '' : '，${errors.length} 条无法解析'}';
+        '${errors.isEmpty ? '' : '，${errors.length} 条无法解析'}'
+        '${failed == 0 ? '' : '，$failed 条写入失败'}';
     notifyListeners();
     return importSummary;
   }

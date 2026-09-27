@@ -38,8 +38,9 @@ class ScanReport {
 /// 设计为可在 isolate 中运行：只做 IO 与过滤，不触碰数据库。
 class ScanService {
   /// 无条件跳过的目录名（明确不会藏小说的系统/垃圾目录）。
+  /// 注意：'android' 不在此列 —— 它由 _shouldSkipDir 按"存储根顶层"判断，
+  /// 用户自建的名为 android 的目录不应整树漏扫。
   static const _skipDirs = {
-    'android',
     'dalvik-cache',
     'lost.dir',
     'thumbnails',
@@ -51,12 +52,19 @@ class ScanService {
 
   /// 是否应跳过 [name] 目录（[dirPath] 为其完整路径）。
   ///
-  /// 注意：`data`/`obb`/`cache` 这类通用名字只在 Android/ 下才跳过，
-  /// 不再误伤用户自建的同名目录（如 /storage/emulated/0/1122/data）。
+  /// `android` 只在存储根顶层跳过（系统目录）；用户自建的名为 android 的
+  /// 目录正常扫描。`data`/`obb` 只在 android 目录下跳过（应用私有区）。
   static bool _shouldSkipDir(String name, String dirPath) {
     if (name.startsWith('.')) return true;
     final lower = name.toLowerCase();
     if (_skipDirs.contains(lower)) return true;
+    if (lower == 'android') {
+      final atStorageRoot = RegExp(r'^/storage/[^/]+$', caseSensitive: false)
+              .hasMatch(dirPath) ||
+          dirPath.toLowerCase() == '/storage/emulated/0';
+      if (atStorageRoot) return true;
+      // 非存储根的 android 目录：用户自建，继续扫描
+    }
     final parent = dirPath.toLowerCase();
     final inAndroidDir = parent.endsWith('/android') || parent.contains('/android/');
     if (inAndroidDir && (lower == 'data' || lower == 'obb')) {
@@ -95,8 +103,13 @@ class ScanService {
     while (stack.isNotEmpty) {
       final dir = stack.removeLast();
       final dirPath = dir.path;
-      if (visited.contains(dirPath)) continue;
-      visited.add(dirPath);
+      // 归一化：'/a/b/' 与 '/a/b' 视为同一节点，避免重复候选
+      final visitedKey =
+          dirPath.endsWith('/') && dirPath.length > 1
+              ? dirPath.substring(0, dirPath.length - 1)
+              : dirPath;
+      if (visited.contains(visitedKey)) continue;
+      visited.add(visitedKey);
       List<FileSystemEntity> entries;
       try {
         entries = dir.listSync(followLinks: false);
@@ -106,13 +119,37 @@ class ScanService {
       }
       dirsWalked++;
       for (final e in entries) {
-        final name = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
+        // 直接字符串切片取文件名：逐实体构造 Uri 是数十万次纯浪费
+        final rawPath = e.path;
+        final name =
+            rawPath.substring(rawPath.lastIndexOf('/') + 1);
         if (e is Directory) {
           if (_shouldSkipDir(name, dirPath)) {
             skippedDirs++;
             continue;
           }
           stack.add(e);
+        } else if (e is Link) {
+          // 软链接：只跟进指向"文件"的链接（书籍）；目录链接不跟进以防环
+          try {
+            final stat = FileStat.statSync(e.path);
+            if (stat.type == FileSystemEntityType.file) {
+              final format = BookFormat.fromPath(name);
+              if (format == BookFormat.unknown) continue;
+              final stat2 = e.resolveSymbolicLinksSync();
+              final statFile = File(stat2);
+              final size = statFile.lengthSync();
+              if (size < 512) continue;
+              found.add(FoundBook(
+                stat2,
+                TextUtils.cleanTitle(name),
+                format,
+                size,
+              ));
+            }
+          } catch (_) {
+            // 悬空链接：跳过
+          }
         } else if (e is File) {
           final format = BookFormat.fromPath(name);
           if (format == BookFormat.unknown) continue;
