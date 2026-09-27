@@ -23,7 +23,7 @@ jobs:
     # 安全：签名 secrets 不放 job 级 env（否则 pub get/analyze/test 全程可读），
     # 只在注入签名的步骤内展开；是否配置过用非敏感的布尔输出传递。
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 缓存 pub 与 Gradle 依赖
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
