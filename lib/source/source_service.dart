@@ -72,14 +72,14 @@ class SourceException implements Exception {
 /// 灾难性回溯——跑在 UI 线程会永久冻结界面（只能杀进程）。
 /// 通过 `compute` 调用本函数，冻结被隔离在子线程中。
 /// 顶层函数才能被 compute 派发（不能是闭包或实例方法）。
-String loadContentInIsolate(Map<String, String> job) {
+Future<String> loadContentInIsolate(Map<String, String> job) async {
   final raw = job['raw'] ?? '';
   final url = job['url'] ?? '';
   final decoded = jsonDecode(raw);
   final source =
       decoded is Map<String, dynamic> ? BookSource.fromLegadoJson(decoded) : null;
   if (source == null) throw const SourceException('书源数据损坏');
-  return SourceService.loadContent(source, url);
+  return await SourceService.loadContent(source, url);
 }
 
 /// 书源服务：搜索、详情、目录、正文。

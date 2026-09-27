@@ -660,6 +660,7 @@ class _JsonToken {
   final String? key;
   final int? index;
   final bool isAll;
+  final String? recursiveKey;
   const _JsonToken.key(this.key)
       : index = null,
         isAll = false,
