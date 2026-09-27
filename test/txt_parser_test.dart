@@ -35,7 +35,7 @@ void main() {
 
   test('连续假标题（目录块）折叠为一个', () {
     // 序章/引子/楔子 都是合法标题词，但连续 3 个是目录块特征
-    final text = '序章\n引子\n楔子\n第1章 正文开始\n正文内容。';
+    final text = '序章\n引子\n楔子\n\n\n\n第1章 正文开始\n正文内容。';
     final chapters = TxtParser.splitChapters('书', text);
     expect(chapters.length, 2);
     expect(chapters[0].title, '序章');

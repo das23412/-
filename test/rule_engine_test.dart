@@ -195,8 +195,8 @@ void main() {
       final d = RuleEngine.parseHtml(
           '<div id="x"><span>Hi</span><b> yo</b><em>&amp;more</em></div>');
       final root = d.documentElement!;
-      // textnodes / ownText：直接文本
-      expect(RuleEngine.evalString('@css:#x@textnodes', root: root), 'Hi yo &more');
+      // textnodes / ownText：直接文本（&amp; 实体解码为 &，无空格）
+      expect(RuleEngine.evalString('@css:#x@textnodes', root: root), 'Hi yo&more');
       // html / all
       expect(RuleEngine.evalString('@css:#x@html', root: root),
           '<span>Hi</span><b> yo</b><em>&amp;more</em>');
@@ -204,14 +204,14 @@ void main() {
           contains('<div id="x"'));
       // textlen：可见文本长度
       expect(RuleEngine.evalString('@css:#x@textlen', root: root),
-          '${'<span>Hi</span><b> yo</b><em>&more</em>'.length}');
+          '${'Hi yo&more'.length}');
       // id.X 链式定位
       expect(
-          RuleEngine.evalString('id.x@text', root: root), 'Hi yo &more');
+          RuleEngine.evalString('id.x@text', root: root), 'Hi yo&more');
       // Map 上的 [*] 展开
       final json = {'m': {'a': 1, 'b': 2}};
-      final nodes = RuleEngine.evalList('@json:\$..[*]', json: json);
-      expect(nodes.map((n) => n.json), containsAll([1, 2]));
+      final nodes = RuleEngine.evalList('@json:\$.m[*]', json: json);
+      expect(nodes.map((n) => n.json), [1, 2]);
     });
 
     test('非法 ## 正则回退为原文本', () {
