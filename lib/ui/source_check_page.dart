@@ -8,7 +8,7 @@ import '../source/book_source.dart';
 import '../source/source_service.dart';
 import '../state/source_state.dart';
 
-enum _StepStatus { pending, running, ok, fail, unsupported }
+enum _StepStatus { running, ok, fail, unsupported }
 
 class _StepResult {
   final _StepStatus status;

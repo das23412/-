@@ -47,7 +47,6 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   bool _allowSources = false;
   bool _searching = false;
   List<_AggregatedBook> _results = [];
-  int _sourceCount = 0;
   int _failedCount = 0;
   String _statusText = '';
 
@@ -84,7 +83,6 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
       _searching = true;
       _results = [];
       _failedCount = 0;
-      _sourceCount = sources.length;
       _statusText = '正在搜索 ${sources.length} 个书源…';
     });
     try {

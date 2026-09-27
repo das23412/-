@@ -266,7 +266,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.cloud_search_outlined),
+              leading: const Icon(Icons.public),
               title: const Text('从书源搜索在线书籍'),
               subtitle: const Text('按导入的书源搜索，在线阅读（需打开书源联网）'),
               onTap: () {
