@@ -68,14 +68,14 @@ class RuleEngine {
     for (final alt in parts.base.split('||')) {
       final a = alt.trim();
       if (a.isEmpty) continue;
-      List<RuleNode>? nodes;
+      final List<RuleNode> nodes;
       try {
         nodes = _evalListAlternative(a, root: root, json: json);
       } on SourceUnsupportedException {
         sawUnsupported = true;
         continue;
       }
-      if (nodes != null && nodes.isNotEmpty) return nodes;
+      if (nodes.isNotEmpty) return nodes;
     }
     if (sawUnsupported) {
       throw const SourceUnsupportedException('该规则需要执行 JS 或 XPath，暂不支持');

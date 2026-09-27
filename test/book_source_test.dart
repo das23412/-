@@ -39,9 +39,9 @@ void main() {
 
     test('逐行 JSON 合并格式', () {
       final text = '{"bookSourceUrl":"https://c.com","bookSourceName":"丙",'
-              '"searchUrl":"https://c.com/s/{{key}}"}\n'
-          + '{"bookSourceUrl":"https://d.com","bookSourceName":"丁",'
-              '"searchUrl":"https://d.com/s/{{key}}"}';
+          '"searchUrl":"https://c.com/s/{{key}}"}\n'
+          '{"bookSourceUrl":"https://d.com","bookSourceName":"丁",'
+          '"searchUrl":"https://d.com/s/{{key}}"}';
       final sources = BookSource.parseMany(text);
       expect(sources.length, 2);
       expect(sources[1].name, '丁');
