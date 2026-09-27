@@ -74,4 +74,11 @@ class AppSettings {
   bool get allowNetworkDownload =>
       _prefs.getBool(_kAllowNetworkDownload) ?? false;
   set allowNetworkDownload(bool v) => _prefs.setBool(_kAllowNetworkDownload, v);
+
+  /// 「书源联网」独立开关，默认关闭。
+  /// 控制书源的搜索/目录/正文请求；与「允许联网下载」分开，
+  /// 便于用户分别管控两类网络行为。
+  static const _kAllowSources = 'allow_book_sources';
+  bool get allowSources => _prefs.getBool(_kAllowSources) ?? false;
+  set allowSources(bool v) => _prefs.setBool(_kAllowSources, v);
 }

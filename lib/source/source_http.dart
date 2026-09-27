@@ -1,0 +1,97 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import '../core/charset.dart';
+
+/// 书源 HTTP 响应。
+class SourceHttpResponse {
+  final String body;
+  final String finalUrl; // 重定向后的最终地址（相对路径解析基准）
+  final bool isJson;
+
+  const SourceHttpResponse(this.body, this.finalUrl, this.isJson);
+}
+
+/// 书源网络层：GET/POST、自定义头、编码识别（GBK 站点常见）。
+class SourceHttp {
+  static const defaultUa =
+      'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+  static const maxBytes = 8 * 1024 * 1024; // 单次响应 8MB 上限
+
+  static Future<SourceHttpResponse> request(
+    String url, {
+    String method = 'GET',
+    String? body,
+    Map<String, String> headers = const {},
+    String? charset,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final uri = Uri.parse(url);
+    final client = HttpClient();
+    try {
+      client.userAgent =
+          headers['User-Agent'] ?? headers['user-agent'] ?? defaultUa;
+      final HttpClientRequest req;
+      if (method.toUpperCase() == 'POST') {
+        req = await client.postUrl(uri);
+      } else {
+        req = await client.getUrl(uri);
+      }
+      headers.forEach((k, v) {
+        if (k.toLowerCase() != 'user-agent') req.headers.set(k, v);
+      });
+      if (body != null && method.toUpperCase() == 'POST') {
+        req.write(body);
+      }
+      final resp = await req.close().timeout(timeout);
+      final bytes = <int>[];
+      await for (final chunk in resp) {
+        bytes.addAll(chunk);
+        if (bytes.length > maxBytes) {
+          throw const HttpException('响应超过 8MB 上限');
+        }
+      }
+      final contentType = resp.headers.value('content-type') ?? '';
+      final effectiveCharset =
+          charset ?? _charsetFromContentType(contentType);
+      final text = _decode(bytes, effectiveCharset);
+      final isJson = contentType.contains('json') ||
+          text.trimLeft().startsWith('{') ||
+          text.trimLeft().startsWith('[');
+      final finalUrl = resp.redirects.isNotEmpty
+          ? resp.redirects.last.location.toString()
+          : url;
+      return SourceHttpResponse(text, finalUrl, isJson);
+    } on TimeoutException {
+      throw const HttpException('书源请求超时');
+    } on SocketException {
+      throw const HttpException('网络连接失败');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static String? _charsetFromContentType(String contentType) {
+    final m =
+        RegExp(r'charset=([\w-]+)', caseSensitive: false).firstMatch(contentType);
+    return m?.group(1);
+  }
+
+  static String _decode(List<int> bytes, String? charset) {
+    final cs = (charset ?? '').trim().toLowerCase();
+    if (cs.isEmpty || cs == 'utf-8' || cs == 'utf8') {
+      return CharsetDecoder.decode(bytes);
+    }
+    if (cs.contains('gb')) return CharsetDecoder.decodeGbk(bytes);
+    if (cs == 'utf-16' || cs == 'utf16') {
+      return CharsetDecoder.decode(bytes); // BOM 探测覆盖 UTF-16
+    }
+    try {
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return CharsetDecoder.decode(bytes);
+    }
+  }
+}

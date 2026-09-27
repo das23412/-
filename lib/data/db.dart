@@ -19,7 +19,7 @@ class AppDb {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'moyue.db'),
-      version: 1,
+      version: 2,
       // SQLite 默认不启用外键约束，必须显式打开，
       // 否则删书后书签/章节缓存会永久残留
       onConfigure: (db) async {
@@ -50,7 +50,12 @@ class AppDb {
             tags TEXT NOT NULL DEFAULT '',
             chapter_count INTEGER NOT NULL DEFAULT 0,
             word_count INTEGER NOT NULL DEFAULT 0,
-            imported INTEGER NOT NULL DEFAULT 0
+            imported INTEGER NOT NULL DEFAULT 0,
+            author TEXT NOT NULL DEFAULT '',
+            cover_url TEXT NOT NULL DEFAULT '',
+            is_online INTEGER NOT NULL DEFAULT 0,
+            source_id TEXT NOT NULL DEFAULT '',
+            book_url TEXT NOT NULL DEFAULT ''
           )
         ''');
         await db.execute('''
@@ -77,8 +82,58 @@ class AppDb {
             FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
           )
         ''');
+        await _createSourceTables(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          // v2：在线书源支持（书源表、在线书字段、目录/正文缓存）
+          await db.execute(
+              "ALTER TABLE books ADD COLUMN author TEXT NOT NULL DEFAULT ''");
+          await db.execute(
+              "ALTER TABLE books ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''");
+          await db.execute(
+              'ALTER TABLE books ADD COLUMN is_online INTEGER NOT NULL DEFAULT 0');
+          await db.execute(
+              "ALTER TABLE books ADD COLUMN source_id TEXT NOT NULL DEFAULT ''");
+          await db.execute(
+              "ALTER TABLE books ADD COLUMN book_url TEXT NOT NULL DEFAULT ''");
+          await _createSourceTables(db);
+        }
       },
     );
+  }
+
+  /// v2 新增表：书源、在线书目录缓存、正文缓存。
+  Future<void> _createSourceTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sources(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        src_group TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        raw TEXT NOT NULL,
+        added_at INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS chapter_cache(
+        book_id INTEGER NOT NULL,
+        idx INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT NOT NULL,
+        PRIMARY KEY(book_id, idx),
+        FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS content_cache(
+        book_id INTEGER NOT NULL,
+        idx INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        PRIMARY KEY(book_id, idx),
+        FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
+      )
+    ''');
   }
 
   // ---------- 书架 ----------
@@ -217,5 +272,90 @@ class AppDb {
       if (t.isNotEmpty) set.addAll(t.split(',').where((e) => e.isNotEmpty));
     }
     return set;
+  }
+
+  // ---------- 书源 ----------
+
+  Future<List<Map<String, Object?>>> allSourceRows() async {
+    final db = await database;
+    return db.query('sources', orderBy: 'added_at ASC, id ASC');
+  }
+
+  Future<void> upsertSource({
+    required String id,
+    required String name,
+    required String group,
+    required bool enabled,
+    required String raw,
+    required int addedAt,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'sources',
+      {
+        'id': id,
+        'name': name,
+        'src_group': group,
+        'enabled': enabled ? 1 : 0,
+        'raw': raw,
+        'added_at': addedAt,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> setSourceEnabled(String id, bool enabled) async {
+    final db = await database;
+    await db.update('sources', {'enabled': enabled ? 1 : 0},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteSource(String id) async {
+    final db = await database;
+    await db.delete('sources', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---------- 在线目录 / 正文缓存 ----------
+
+  Future<void> saveToc(
+      int bookId, List<({String title, String url})> chapters) async {
+    final db = await database;
+    final batch = db.batch();
+    batch.delete('chapter_cache', where: 'book_id = ?', whereArgs: [bookId]);
+    for (int i = 0; i < chapters.length; i++) {
+      batch.insert('chapter_cache', {
+        'book_id': bookId,
+        'idx': i,
+        'title': chapters[i].title,
+        'url': chapters[i].url,
+      });
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<List<({String title, String url})>> loadToc(int bookId) async {
+    final db = await database;
+    final rows = await db.query('chapter_cache',
+        where: 'book_id = ?', whereArgs: [bookId], orderBy: 'idx ASC');
+    return rows
+        .map((r) => (title: r['title'] as String, url: r['url'] as String))
+        .toList();
+  }
+
+  Future<void> saveContent(int bookId, int idx, String text) async {
+    final db = await database;
+    await db.insert(
+      'content_cache',
+      {'book_id': bookId, 'idx': idx, 'text': text},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<String?> loadContent(int bookId, int idx) async {
+    final db = await database;
+    final rows = await db.query('content_cache',
+        where: 'book_id = ? AND idx = ?', whereArgs: [bookId, idx], limit: 1);
+    if (rows.isEmpty) return null;
+    return rows.first['text'] as String;
   }
 }

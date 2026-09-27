@@ -22,6 +22,13 @@ class Book {
   int wordCount;
   final bool imported; // true = 应用内私有副本，false = 原位置引用
 
+  // 在线书字段（is_online 为 true 时有效）
+  String author; // 作者
+  String coverUrl; // 封面 URL
+  final bool isOnline; // 在线书（无本地文件）
+  final String sourceId; // 所属书源 id（bookSourceUrl）
+  final String bookUrl; // 书籍详情页 URL
+
   Book({
     this.id,
     required this.path,
@@ -39,6 +46,11 @@ class Book {
     this.chapterCount = 0,
     this.wordCount = 0,
     this.imported = false,
+    this.author = '',
+    this.coverUrl = '',
+    this.isOnline = false,
+    this.sourceId = '',
+    this.bookUrl = '',
   });
 
   /// 标签列表。
@@ -64,6 +76,11 @@ class Book {
     int? chapterCount,
     int? wordCount,
     bool? imported,
+    String? author,
+    String? coverUrl,
+    bool? isOnline,
+    String? sourceId,
+    String? bookUrl,
   }) {
     return Book(
       id: id ?? this.id,
@@ -82,6 +99,11 @@ class Book {
       chapterCount: chapterCount ?? this.chapterCount,
       wordCount: wordCount ?? this.wordCount,
       imported: imported ?? this.imported,
+      author: author ?? this.author,
+      coverUrl: coverUrl ?? this.coverUrl,
+      isOnline: isOnline ?? this.isOnline,
+      sourceId: sourceId ?? this.sourceId,
+      bookUrl: bookUrl ?? this.bookUrl,
     );
   }
 
@@ -102,6 +124,11 @@ class Book {
         'chapter_count': chapterCount,
         'word_count': wordCount,
         'imported': imported ? 1 : 0,
+        'author': author,
+        'cover_url': coverUrl,
+        'is_online': isOnline ? 1 : 0,
+        'source_id': sourceId,
+        'book_url': bookUrl,
       };
 
   static Book fromMap(Map<String, Object?> m) => Book(
@@ -124,6 +151,11 @@ class Book {
         chapterCount: (m['chapter_count'] as num?)?.toInt() ?? 0,
         wordCount: (m['word_count'] as num?)?.toInt() ?? 0,
         imported: (m['imported'] as int?) == 1,
+        author: (m['author'] as String?) ?? '',
+        coverUrl: (m['cover_url'] as String?) ?? '',
+        isOnline: (m['is_online'] as int?) == 1,
+        sourceId: (m['source_id'] as String?) ?? '',
+        bookUrl: (m['book_url'] as String?) ?? '',
       );
 }
 
