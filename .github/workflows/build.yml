@@ -50,7 +50,14 @@ jobs:
             echo "configured=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: 注入正式签名（可选，需配置仓库 Secrets）
+      - name: 校验签名配置（未配置则拒绝构建，防止随机签名包）
+        if: steps.sigcheck.outputs.configured != 'true'
+        run: |
+          echo "::error::未配置正式签名 Secrets（MOYUE_KEYSTORE_BASE64 / MOYUE_STORE_PASSWORD / MOYUE_KEY_ALIAS / MOYUE_KEY_PASSWORD）。"
+          echo "::error::为避免产出随机签名、无法覆盖安装的 APK，已拒绝构建。请到仓库 Settings → Secrets and variables → Actions 添加，见 docs/发布检查清单.md。"
+          exit 1
+
+      - name: 注入正式签名（需配置仓库 Secrets）
         if: steps.sigcheck.outputs.configured == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.MOYUE_KEYSTORE_BASE64 }}
@@ -61,11 +68,6 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > android/app/moyue-key.jks
           printf 'storeFile=moyue-key.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
             "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/key.properties
-
-      - name: 固定签名密钥（保证各版本可覆盖安装）
-        run: |
-          mkdir -p ~/.android
-          cp android/debug.keystore ~/.android/debug.keystore
 
       - name: 构建 APK
         run: flutter build apk --release

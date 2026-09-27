@@ -65,24 +65,22 @@
 应用数据（书架、进度、书签、导入的书）全部保存在应用私有目录，卸载即清除。
 不会认为它是病毒：应用使用标准 Flutter 框架、正常签名、无任何可疑行为。
 
-## 三、正式签名（可选）
+## 三、正式签名（已轮换为私密密钥）
 
-默认构建使用 debug 签名，**可以直接安装使用**。如果想用正式签名（比如以后上架应用市场）：
+2026-09-27 起签名密钥已轮换：不再使用提交在仓库里的公共 debug 密钥
+（任何人可伪造同签名更新），改为**私密正式密钥**，只保存在开发者本机
+（`D:\glmchunchu\moyue-release-key\`，务必多处备份）和仓库加密 Secrets 里。
 
-1. 本机生成密钥库（需要 Java 环境，或让 AI 帮你生成命令）：
-   ```bash
-   keytool -genkey -v -keystore moyue-key.jks -keyalg RSA -keysize 2048 -validity 36500 -alias moyue
-   ```
-2. 在 GitHub 仓库 → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`，添加 4 个：
-   | Secret 名 | 值 |
-   |-----------|-----|
-   | `MOYUE_KEYSTORE_BASE64` | `moyue-key.jks` 文件的 Base64 内容（`base64 -w0 moyue-key.jks`） |
-   | `MOYUE_STORE_PASSWORD` | 生成密钥库时输入的 store 密码 |
-   | `MOYUE_KEY_ALIAS` | `moyue` |
-   | `MOYUE_KEY_PASSWORD` | key 密码 |
-3. 重新触发构建即可得到正式签名的 APK。
+- CI 构建时通过 4 个 Secrets（`MOYUE_KEYSTORE_BASE64` / `MOYUE_STORE_PASSWORD` /
+  `MOYUE_KEY_ALIAS` / `MOYUE_KEY_PASSWORD`）注入签名；
+  未配置时 CI 会直接失败，拒绝产出随机签名包
+- 密钥库为 PKCS12 格式（别名 `moyue-release`），`build.gradle.kts` 已配置 `storeType = "pkcs12"`
+- **一次性迁移**：从 v1.5.0 及更早版本升级到 v1.6.0+ 需要**卸载重装一次**
+  （书架/进度清空）；此后所有版本恢复覆盖安装
 
-> ⚠️ 密钥库文件请自己妥善备份，**不要**提交到仓库。
+本地 `flutter run` 调试不受影响（debug 构建自动使用本机 debug 密钥）；
+本地 `flutter build apk --release` 需要手工放置 `android/key.properties`
+（含 storeFile/storePassword/keyAlias/keyPassword 四项）。
 
 ## 四、日常使用
 
