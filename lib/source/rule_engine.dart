@@ -115,7 +115,19 @@ class RuleEngine {
   static String _applyRegex(String text, String match, String replace) {
     if (match.isEmpty) return text;
     try {
-      return text.replaceAll(RegExp(match), replace);
+      final re = RegExp(match);
+      // Dart 的 replaceAll 不解释替换串里的 $N 捕获组引用，
+      // 需要用 replaceAllMapped 手动展开（书源规则常用 $1 写法）
+      return text.replaceAllMapped(re, (m) {
+        if (replace.isEmpty) return '';
+        return replace.replaceAllMapped(RegExp(r'\$(\d+)'), (g) {
+          final idx = int.tryParse(g.group(1)!);
+          if (idx == null) return g.group(0)!;
+          if (idx == 0) return m.group(0) ?? '';
+          if (idx > m.groupCount) return '';
+          return m.group(idx) ?? '';
+        });
+      });
     } on FormatException {
       return text; // 书源里的正则写错了：跳过净化而不是崩溃
     }
