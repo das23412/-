@@ -31,17 +31,18 @@ class RuleEngine {
   // ---------- 对外入口 ----------
 
   /// 执行规则取一个字符串（多结果用换行连接，属性类取第一个命中）。
-  /// 所有分支都需要 JS/XPath 时抛 [SourceUnsupportedException]。
+  /// 先按 `||` 切分兜底分支，再在每个分支内处理 `##` 后处理，
+  /// 全部分支都需要 JS/XPath 时抛 [SourceUnsupportedException]。
   static String? evalString(
     String rule, {
     Element? root,
     dynamic json,
     String? baseUrl,
   }) {
-    final parts = _splitPostProcess(rule);
     var sawUnsupported = false;
-    for (final alt in parts.base.split('||')) {
-      final a = alt.trim();
+    for (final alt in rule.split('||')) {
+      final parts = _splitPostProcess(alt);
+      final a = parts.base.trim();
       if (a.isEmpty) continue;
       String? r;
       try {
@@ -63,12 +64,12 @@ class RuleEngine {
   /// 执行列表规则（bookList / chapterList），返回元素或 JSON 值列表。
   /// 所有分支都需要 JS/XPath 时抛 [SourceUnsupportedException]。
   static List<RuleNode> evalList(String rule, {Element? root, dynamic json}) {
-    final parts = _splitPostProcess(rule);
     var sawUnsupported = false;
-    for (final alt in parts.base.split('||')) {
-      final a = alt.trim();
+    for (final alt in rule.split('||')) {
+      final parts = _splitPostProcess(alt);
+      final a = parts.base.trim();
       if (a.isEmpty) continue;
-      final List<RuleNode> nodes;
+      List<RuleNode> nodes;
       try {
         nodes = _evalListAlternative(a, root: root, json: json);
       } on SourceUnsupportedException {
@@ -116,21 +117,68 @@ class RuleEngine {
     if (match.isEmpty) return text;
     try {
       final re = RegExp(match);
-      // Dart 的 replaceAll 不解释替换串里的 $N 捕获组引用，
-      // 需要用 replaceAllMapped 手动展开（书源规则常用 $1 写法）
-      return text.replaceAllMapped(re, (m) {
-        if (replace.isEmpty) return '';
-        return replace.replaceAllMapped(RegExp(r'\$(\d+)'), (g) {
-          final idx = int.tryParse(g.group(1)!);
-          if (idx == null) return g.group(0)!;
-          if (idx == 0) return m.group(0) ?? '';
-          if (idx > m.groupCount) return '';
-          return m.group(idx) ?? '';
-        });
-      });
+      if (replace.isEmpty) return text.replaceAllMapped(re, (_) => '');
+      return text.replaceAllMapped(re, (m) => _expandReplacement(replace, m));
     } on FormatException {
       return text; // 书源里的正则写错了：跳过净化而不是崩溃
     }
+  }
+
+  /// 展开替换串里的捕获组引用：$N / ${N} / $& / $` / $' / $$。
+  /// （Dart 的 replaceAll 不解释替换串，需要手动展开。）
+  static String _expandReplacement(String replace, Match m) {
+    final buf = StringBuffer();
+    for (int i = 0; i < replace.length; i++) {
+      final c = replace[i];
+      if (c != r'$' || i == replace.length - 1) {
+        buf.write(c);
+        continue;
+      }
+      final next = replace[i + 1];
+      switch (next) {
+        case r'$':
+          buf.write(r'$');
+          i++;
+          break;
+        case '&':
+          buf.write(m.group(0) ?? '');
+          i++;
+          break;
+        case '`':
+          buf.write(m.input.substring(0, m.start));
+          i++;
+          break;
+        case '\'':
+          buf.write(m.input.substring(m.end));
+          i++;
+          break;
+        case '{':
+          final close = replace.indexOf('}', i);
+          if (close > i + 1) {
+            buf.write(_groupOf(m, int.tryParse(replace.substring(i + 2, close))));
+            i = close;
+          } else {
+            buf.write(c);
+          }
+          break;
+        default:
+          final idx = int.tryParse(next);
+          if (idx != null) {
+            buf.write(_groupOf(m, idx));
+            i++;
+          } else {
+            buf.write(c);
+          }
+      }
+    }
+    return buf.toString();
+  }
+
+  static String _groupOf(Match m, int? idx) {
+    if (idx == null) return '';
+    if (idx == 0) return m.group(0) ?? '';
+    if (idx > m.groupCount) return '';
+    return m.group(idx) ?? '';
   }
 
   // ---------- 内部：单条规则 ----------
@@ -463,6 +511,9 @@ class RuleEngine {
         switch (lower) {
           case 'text':
             v = _domToText(el).trim();
+            break;
+          case 'textlen':
+            v = el.text.length.toString();
             break;
           case 'textnodes':
           case 'owntext':

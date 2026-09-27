@@ -108,25 +108,38 @@ class SourceService {
     return SourceRequest(url, method, body, headers, charset);
   }
 
-  /// 多源搜索：并发执行，单源失败/超时被隔离，返回成功的结果与失败原因。
+  /// 多源搜索：并发执行（默认最多 6 个源同时请求），单源失败/超时被隔离，
+  /// 返回成功的结果与失败原因。
   static Future<(List<SourceBook>, Map<String, String>)> searchAll(
     List<BookSource> sources,
     String keyword, {
     int page = 1,
     Duration timeout = const Duration(seconds: 15),
+    int maxConcurrency = 6,
   }) async {
     final results = <SourceBook>[];
     final errors = <String, String>{};
-    await Future.wait(sources.map((s) async {
-      try {
-        final books = await search(s, keyword, page: page).timeout(timeout);
-        results.addAll(books);
-      } on SourceUnsupportedException catch (e) {
-        errors[s.id] = e.message;
-      } catch (e) {
-        errors[s.id] = e.toString();
+    var index = 0;
+    Future<void> worker() async {
+      while (index < sources.length) {
+        final s = sources[index];
+        index++;
+        try {
+          final books = await search(s, keyword, page: page).timeout(timeout);
+          results.addAll(books);
+        } on SourceUnsupportedException catch (e) {
+          errors[s.id] = e.message;
+        } catch (e) {
+          errors[s.id] = e.toString();
+        }
       }
-    }));
+    }
+
+    final workers = <Future<void>>[];
+    for (int i = 0; i < maxConcurrency && i < sources.length; i++) {
+      workers.add(worker());
+    }
+    await Future.wait(workers);
     return (results, errors);
   }
 

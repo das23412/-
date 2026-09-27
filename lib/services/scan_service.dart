@@ -116,14 +116,18 @@ class ScanService {
         } else if (e is File) {
           final format = BookFormat.fromPath(name);
           if (format == BookFormat.unknown) continue;
-          final stat = e.statSync();
-          if (stat.size < 512) continue; // 过小的碎片文件
-          found.add(FoundBook(
-            e.path,
-            TextUtils.cleanTitle(name),
-            format,
-            stat.size,
-          ));
+          try {
+            final stat = e.statSync();
+            if (stat.size < 512) continue; // 过小的碎片文件
+            found.add(FoundBook(
+              e.path,
+              TextUtils.cleanTitle(name),
+              format,
+              stat.size,
+            ));
+          } catch (_) {
+            // 扫描途中文件被删除或不可访问：跳过，不影响整次扫描
+          }
         }
       }
     }

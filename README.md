@@ -104,7 +104,7 @@
 
 ```bash
 flutter analyze   # 静态检查，当前 0 问题
-flutter test      # 单元测试，当前 35 个用例全通过
+flutter test      # 单元测试，当前 80+ 个用例全通过
 ```
 
 ## 六、iOS 版
@@ -129,12 +129,14 @@ moyue/
 │   ├── parser/        # TXT / EPUB / MOBI / FB2 / HTML 解析器
 │   ├── reader/        # 分页引擎
 │   ├── services/      # 文件扫描
-│   ├── state/         # 状态管理（书架 / 阅读 / 主题 / 配置）
-│   ├── ui/            # 界面（书架 / 阅读器 / 文件夹管理 / 详情）
+│   ├── source/        # 书源引擎（Legado 兼容：规则 / HTTP / 搜索目录正文）
+│   ├── state/         # 状态管理（书架 / 阅读 / 主题 / 配置 / 书源）
+│   ├── ui/            # 界面（书架 / 阅读器 / 书源管理 / 搜索 / 检测）
 │   ├── platform/      # 与原生通信（接收其他 App 的文件）
 │   └── main.dart      # 入口
 ├── android/           # 安卓工程（权限最小化 + VIEW intent 接收）
 ├── ios/               # iOS 工程（代码兼容，暂不打包）
-├── test/              # 35 个单元测试
+├── test/              # 80+ 个单元测试
+├── analysis_options.yaml  # 静态检查规则
 └── .github/workflows/ # GitHub Actions 云端打包
 ```

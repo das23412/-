@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -20,11 +21,16 @@ class UpdateInfo {
   final int size;
   final String? releaseNotes;
 
+  /// 官方发布资产的 sha256（GitHub Release 自带），用于下载后校验；
+  /// 为空表示无法校验（直接跳过而不是拒绝更新）。
+  final String sha256;
+
   UpdateInfo({
     required this.version,
     required this.downloadUrl,
     required this.size,
     this.releaseNotes,
+    this.sha256 = '',
   });
 }
 
@@ -89,11 +95,14 @@ class UpdateService {
       if (apk == null) {
         throw const UpdateException('最新版本没有附带 APK 文件');
       }
+      final rawDigest = (apk['digest'] as String?) ?? '';
       return UpdateInfo(
         version: latest,
         downloadUrl: apk['browser_download_url'] as String,
         size: (apk['size'] as num?)?.toInt() ?? -1,
         releaseNotes: (json['body'] as String?)?.trim(),
+        sha256:
+            rawDigest.startsWith('sha256:') ? rawDigest.substring(7) : '',
       );
     } on TimeoutException {
       throw const UpdateException('连接超时（GitHub 访问不稳定，稍后再试）');
@@ -107,10 +116,13 @@ class UpdateService {
   }
 
   /// 下载新版 APK 到应用私有目录，返回文件路径。
+  /// 提供 [expectedSha256] 时（GitHub Release 资产的 digest）下载完成后校验，
+  /// 不匹配则删除临时文件并抛出异常，避免安装被篡改的包。
   static Future<String> downloadApk(
     String url,
     String version, {
     void Function(int received, int total)? onProgress,
+    String? expectedSha256,
   }) async {
     final support = await getApplicationSupportDirectory();
     final dir = Directory(p.join(support.path, 'updates'));
@@ -150,6 +162,12 @@ class UpdateService {
         rethrow;
       }
       if (received == 0) throw const UpdateException('服务器没有返回内容');
+      if (expectedSha256 != null && expectedSha256.isNotEmpty) {
+        final actual = await sha256.bind(tmp.openRead()).first;
+        if (actual.toString() != expectedSha256.toLowerCase()) {
+          throw const UpdateException('安装包校验失败，与官方发布不一致，请稍后重试');
+        }
+      }
       if (File(dest).existsSync()) File(dest).deleteSync();
       tmp.renameSync(dest);
       tmp = null;

@@ -163,15 +163,12 @@ class BookSource {
 
   /// 按库中保存的原始 JSON 找回书源；不存在或损坏返回 null。
   static Future<BookSource?> findById(String id) async {
-    final rows = await AppDb.instance.allSourceRows();
-    for (final r in rows) {
-      if (r['id'] == id) {
-        try {
-          final decoded = jsonDecode(r['raw'] as String? ?? '');
-          if (decoded is Map<String, dynamic>) return fromLegadoJson(decoded);
-        } catch (_) {}
-      }
-    }
+    final row = await AppDb.instance.sourceRowById(id);
+    if (row == null) return null;
+    try {
+      final decoded = jsonDecode(row['raw'] as String? ?? '');
+      if (decoded is Map<String, dynamic>) return fromLegadoJson(decoded);
+    } catch (_) {}
     return null;
   }
 

@@ -88,6 +88,7 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
             _total = total;
           });
         },
+        expectedSha256: info.sha256,
       );
       setState(() {
         _apkPath = path;

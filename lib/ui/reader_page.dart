@@ -338,9 +338,17 @@ class _ReaderPageState extends State<ReaderPage> {
     // 翻页方式切换：重建各翻页控制器，并把落点重定位到当前进度
     if (_lastPageMode != cfg.settings.pageMode) {
       _lastPageMode = cfg.settings.pageMode;
-      _pageController = null; // 旧控制器随旧组件释放，这里仅脱离引用
+      final oldPage = _pageController;
+      final oldScroll = _scrollController;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // 旧组件当帧仍引用旧控制器，延后一帧释放，避免 detach 中途 dispose
+        oldPage?.dispose();
+        oldScroll?.dispose();
+      });
+      _pageController = null;
       _scrollController = null;
       _scrollAttached = false;
+      // 旧 TurnPageView 卸载时会自行 dispose 旧控制器，这里只脱离引用
       _turnCtrl = null;
       _restoredForChapter = -1;
       _pendingCharOffset = rs.charOffsetInChapter;
@@ -352,10 +360,17 @@ class _ReaderPageState extends State<ReaderPage> {
         rs.currentChapter, style, textWidth, textHeight, cfg.settings.indent);
     _layout = layout;
 
-    // 窗口计算：把上一章/下一章的页面拼进同一个 PageView
-    final windowKey =
-        '${cfg.layoutKey}_${rs.currentChapter}_${textWidth}x$textHeight';
+    // 窗口计算：把上一章/下一章的页面拼进同一个 PageView。
+    // 键包含相邻章节正文长度：在线书正文按需到达时窗口要重建，
+    // 否则残留"空正文"布局，跨章边界出现空白页。
+    final windowKey = '${cfg.layoutKey}_${textWidth}x$textHeight'
+        '_${rs.currentChapter}'
+        '_${rs.chapterTextLength(rs.currentChapter - 1)}'
+        '_${rs.chapterTextLength(rs.currentChapter)}'
+        '_${rs.chapterTextLength(rs.currentChapter + 1)}';
     if (_windowChapter != rs.currentChapter || _windowKey != windowKey) {
+      final sameChapter = _windowChapter == rs.currentChapter;
+      final oldPrevCount = _winPrevCount;
       _windowKey = windowKey;
       _windowChapter = rs.currentChapter;
       _prevLayout = rs.currentChapter > 0
@@ -369,6 +384,18 @@ class _ReaderPageState extends State<ReaderPage> {
       _winPrevCount = _prevLayout?.pageCount ?? 0;
       _winNextCount = _nextLayout?.pageCount ?? 0;
       _turnCtrl = null; // 窗口变化后重建仿真翻页控制器
+      // 同一章内相邻正文到达导致前窗页数变化：把当前页对齐回同一视觉页，
+      // 否则用户正在看的页会突然错位。
+      if (sameChapter && _winPrevCount != oldPrevCount) {
+        final delta = _winPrevCount - oldPrevCount;
+        final pc = _pageController;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || pc == null || !pc.hasClients) return;
+          final cur = pc.page?.round() ?? 0;
+          pc.jumpToPage(
+              (cur + delta).clamp(0, math.max(0, _windowTotal - 1)));
+        });
+      }
     }
 
     // 外观（背景/文字颜色/翻页方式）变化时重建仿真翻页，
@@ -410,10 +437,12 @@ class _ReaderPageState extends State<ReaderPage> {
           _scrollController?.jumpTo(
               (pageInChapter * layout.linesPerPage * layout.lineHeight)
                   .clamp(0.0, double.infinity));
-        } else {
-          if (_pageController?.hasClients ?? false) {
-            _pageController!.jumpToPage(target);
-          }
+        } else if (cfg.settings.pageMode == 0) {
+          // 仿真模式：_pageController 不存在，必须驱动 TurnPageController，
+          // 否则进度恢复完全失效且会反向覆盖真实进度
+          _turnCtrl?.jumpToPage(target);
+        } else if (_pageController?.hasClients ?? false) {
+          _pageController!.jumpToPage(target);
         }
         rs.currentPage = pageInChapter;
       });
@@ -1109,10 +1138,10 @@ class _ReaderPageState extends State<ReaderPage> {
                         max: 32,
                         divisions: 20,
                         label: cfg.settings.fontSize.round().toString(),
-                        onChanged: (v) {
-                          cfg.setFontSize(v);
-                          rs.invalidateLayouts(cfg.layoutKey);
-                        },
+                        onChanged: (v) => cfg.setFontSize(v),
+                        // 拖动过程中不清空排版缓存（每 tick 全部重排会卡顿），松手才重排
+                        onChangeEnd: (v) =>
+                            rs.invalidateLayouts(cfg.layoutKey),
                       ),
                     ),
                   ],
@@ -1128,10 +1157,9 @@ class _ReaderPageState extends State<ReaderPage> {
                         max: 2.6,
                         divisions: 14,
                         label: cfg.settings.lineHeight.toStringAsFixed(1),
-                        onChanged: (v) {
-                          cfg.setLineHeight(v);
-                          rs.invalidateLayouts(cfg.layoutKey);
-                        },
+                        onChanged: (v) => cfg.setLineHeight(v),
+                        onChangeEnd: (v) =>
+                            rs.invalidateLayouts(cfg.layoutKey),
                       ),
                     ),
                   ],

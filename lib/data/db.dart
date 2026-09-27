@@ -83,6 +83,7 @@ class AppDb {
           )
         ''');
         await _createSourceTables(db);
+        await _createBookIndexes(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -98,9 +99,18 @@ class AppDb {
           await db.execute(
               "ALTER TABLE books ADD COLUMN book_url TEXT NOT NULL DEFAULT ''");
           await _createSourceTables(db);
+          await _createBookIndexes(db);
         }
       },
     );
+  }
+
+  /// 书架表查询索引（allBooks 每次按 last_read_at/added_at 排序）。
+  Future<void> _createBookIndexes(Database db) async {
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_books_last_read ON books(last_read_at)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_books_added_at ON books(added_at)');
   }
 
   /// v2 新增表：书源、在线书目录缓存、正文缓存。
@@ -198,19 +208,6 @@ class AppDb {
     await db.delete('books', where: 'path IN ($q) AND imported = 0', whereArgs: paths);
   }
 
-  /// 按扫描结果补齐 / 恢复书籍。
-  Future<List<String>> scanInsert(List<Book> found) async {
-    final inserted = <String>[];
-    for (final b in found) {
-      final exists = await bookByPath(b.path);
-      if (exists == null) {
-        final id = await insertBook(b);
-        if (id > 0) inserted.add(b.title);
-      }
-    }
-    return inserted;
-  }
-
   // ---------- 书签 ----------
 
   Future<List<Bookmark>> bookmarksOf(int bookId) async {
@@ -279,6 +276,14 @@ class AppDb {
   Future<List<Map<String, Object?>>> allSourceRows() async {
     final db = await database;
     return db.query('sources', orderBy: 'added_at ASC, id ASC');
+  }
+
+  /// 精确按 id 取一条书源记录（找不到返回 null）。
+  Future<Map<String, Object?>?> sourceRowById(String id) async {
+    final db = await database;
+    final rows = await db
+        .query('sources', where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : rows.first;
   }
 
   Future<void> upsertSource({

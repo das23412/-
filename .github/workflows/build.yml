@@ -12,11 +12,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      KEYSTORE_BASE64: ${{ secrets.MOYUE_KEYSTORE_BASE64 }}
-      STORE_PASSWORD: ${{ secrets.MOYUE_STORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.MOYUE_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.MOYUE_KEY_PASSWORD }}
+    # 安全：签名 secrets 不放 job 级 env（否则 pub get/analyze/test 全程可读），
+    # 只在注入签名的步骤内展开；是否配置过用非敏感的布尔输出传递。
     steps:
       - uses: actions/checkout@v4
 
@@ -42,8 +39,24 @@ jobs:
       - name: 单元测试
         run: flutter test
 
+      - name: 检测是否配置了正式签名
+        id: sigcheck
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MOYUE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 注入正式签名（可选，需配置仓库 Secrets）
-        if: env.KEYSTORE_BASE64 != ''
+        if: steps.sigcheck.outputs.configured == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MOYUE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.MOYUE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MOYUE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MOYUE_KEY_PASSWORD }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > android/app/moyue-key.jks
           printf 'storeFile=moyue-key.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \

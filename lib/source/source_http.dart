@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../core/charset.dart';
 
@@ -14,11 +15,15 @@ class SourceHttpResponse {
 }
 
 /// 书源网络层：GET/POST、自定义头、编码识别（GBK 站点常见）。
+/// 使用进程级共享 HttpClient（连接复用），不要 close 它。
 class SourceHttp {
   static const defaultUa =
       'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
   static const maxBytes = 8 * 1024 * 1024; // 单次响应 8MB 上限
+
+  static final HttpClient _client = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 15);
 
   static Future<SourceHttpResponse> request(
     String url, {
@@ -29,7 +34,7 @@ class SourceHttp {
     Duration timeout = const Duration(seconds: 15),
   }) async {
     final uri = Uri.parse(url);
-    final client = HttpClient();
+    final client = _client;
     try {
       client.userAgent =
           headers['User-Agent'] ?? headers['user-agent'] ?? defaultUa;
@@ -46,13 +51,20 @@ class SourceHttp {
         req.write(body);
       }
       final resp = await req.close().timeout(timeout);
-      final bytes = <int>[];
-      await for (final chunk in resp) {
-        bytes.addAll(chunk);
-        if (bytes.length > maxBytes) {
-          throw const HttpException('响应超过 8MB 上限');
+      // BytesBuilder 增量累积（旧写法 bytes.addAll 是 O(n²) 拷贝）；
+      // stream.timeout 让响应体的每个间隔也受超时约束，慢速站点不会挂死阅读页
+      final builder = BytesBuilder(copy: false);
+      try {
+        await for (final chunk in resp.timeout(timeout)) {
+          builder.add(chunk);
+          if (builder.length > maxBytes) {
+            throw const HttpException('响应超过 8MB 上限');
+          }
         }
+      } on TimeoutException {
+        throw const HttpException('书源响应超时');
       }
+      final bytes = builder.takeBytes();
       final contentType = resp.headers.value('content-type') ?? '';
       final effectiveCharset =
           charset ?? _charsetFromContentType(contentType);
@@ -68,8 +80,6 @@ class SourceHttp {
       throw const HttpException('书源请求超时');
     } on SocketException {
       throw const HttpException('网络连接失败');
-    } finally {
-      client.close(force: true);
     }
   }
 

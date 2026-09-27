@@ -51,6 +51,9 @@ class ReaderState extends ChangeNotifier {
   /// 在线书各章的正文地址（与 chapters 下标对应）。
   List<String> _chapterUrls = [];
 
+  /// 在线书已解析的书源实例（避免每加载一章都查库反序列化）。
+  BookSource? _source;
+
   /// 打开书：解析文件 → 恢复进度 → 载入书签。
   Future<void> load() async {
     loading = true;
@@ -121,6 +124,7 @@ class ReaderState extends ChangeNotifier {
     if (source == null) {
       throw Exception('书源不存在或已损坏：${book.sourceId}');
     }
+    _source = source;
     // 目录：优先缓存
     var toc = await _db.loadToc(book.id!);
     if (toc.isEmpty) {
@@ -165,7 +169,7 @@ class ReaderState extends ChangeNotifier {
       _applyChapterText(idx, cached);
       return;
     }
-    final source = await BookSource.findById(book.sourceId);
+    final source = _source;
     if (source == null) {
       _applyChapterText(idx, '$_failedPrefix 书源不存在或已删除');
       return;
@@ -232,6 +236,10 @@ class ReaderState extends ChangeNotifier {
     }
   }
 
+  /// 章节正文长度（用于在线书窗口键；越界返回 -1）。
+  int chapterTextLength(int idx) =>
+      idx >= 0 && idx < chapters.length ? chapters[idx].text.length : -1;
+
   ChapterLayout layoutFor(
     int chapterIdx,
     TextStyle style,
@@ -245,6 +253,10 @@ class ReaderState extends ChangeNotifier {
       _layoutWidth = width;
       _layoutHeight = height;
       _layouts.clear();
+    }
+    // 排版缓存上限：读完全书也不至于常驻全部分页结果
+    if (_layouts.length >= 12 && !_layouts.containsKey(chapterIdx)) {
+      _layouts.remove(_layouts.keys.first);
     }
     return _layouts.putIfAbsent(
       chapterIdx,

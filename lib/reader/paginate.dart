@@ -96,6 +96,34 @@ class ChapterLayout {
 
 /// 分页引擎：把章节文本按样式和视口尺寸切成页。
 class Paginator {
+  /// 把段落切成 ≤ [_maxSegmentLength] 的排版块；在标点处优先断开，
+  /// 返回段落内 [start, end) 区间列表。短段落原样返回单块。
+  static const int _maxSegmentLength = 8000;
+
+  static List<(int, int)> _segments(String text) {
+    if (text.length <= _maxSegmentLength) return [(0, text.length)];
+    final segs = <(int, int)>[];
+    final punctuation = RegExp(r'[。！？!?；;…」』”’），,)]');
+    int start = 0;
+    while (text.length - start > _maxSegmentLength) {
+      // 在 [start+3/4上限, start+上限] 窗口内找最后一个标点
+      final windowStart = start + _maxSegmentLength * 3 ~/ 4;
+      final windowEnd = math.min(text.length, start + _maxSegmentLength + 1);
+      int cut = -1;
+      for (int i = windowEnd - 1; i >= windowStart; i--) {
+        if (punctuation.hasMatch(text[i])) {
+          cut = i + 1;
+          break;
+        }
+      }
+      if (cut <= start) cut = start + _maxSegmentLength; // 找不到标点则硬切
+      segs.add((start, cut));
+      start = cut;
+    }
+    if (start < text.length) segs.add((start, text.length));
+    return segs;
+  }
+
   /// 计算一章的布局。
   ///
   /// [indent] 为 true 时每个非空段落首行加两个全角空格（不影响进度偏移的计算）。
@@ -131,18 +159,23 @@ class Paginator {
         lines.add(LineInfo(p, 0, 0));
         continue;
       }
-      tp.text = TextSpan(text: text, style: style);
-      tp.layout(maxWidth: viewportWidth);
-      // 用 getLineBoundary 逐行推进，精确得到每个视觉行的字符区间
-      int prevStart = 0;
-      while (true) {
-        final boundary = tp.getLineBoundary(TextPosition(offset: prevStart));
-        int end = boundary.end;
-        if (end <= prevStart) end = text.length; // 兜底：防死循环
-        if (end > text.length) end = text.length;
-        lines.add(LineInfo(p, prevStart, end));
-        if (end >= text.length) break;
-        prevStart = end;
+      // 超长段落按标点分块排版：单个数万字段落一次 layout 可耗时上秒，
+      // 分块后每块独立测量；块边界强制换行，字符偏移仍然精确。
+      for (final seg in _segments(text)) {
+        final sub = text.substring(seg.$1, seg.$2);
+        tp.text = TextSpan(text: sub, style: style);
+        tp.layout(maxWidth: viewportWidth);
+        // 用 getLineBoundary 逐行推进，精确得到每个视觉行的字符区间
+        int prevStart = 0;
+        while (true) {
+          final boundary = tp.getLineBoundary(TextPosition(offset: prevStart));
+          int end = boundary.end;
+          if (end <= prevStart) end = sub.length; // 兜底：防死循环
+          if (end > sub.length) end = sub.length;
+          lines.add(LineInfo(p, seg.$1 + prevStart, seg.$1 + end));
+          if (end >= sub.length) break;
+          prevStart = end;
+        }
       }
     }
     tp.dispose();
