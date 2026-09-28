@@ -22,7 +22,8 @@ class DownloadService {
       '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
   static const int maxBytes = 500 * 1024 * 1024; // 500MB 上限
 
-  /// 解析用户输入为 Uri。无协议时默认补 https://；仅接受 http/https。
+  /// 解析用户输入为 Uri。无协议时默认补 https://；仅接受 http/https；
+  /// 拒绝回环/内网地址（防止“从链接导入”被用来探测内网）。
   static Uri? tryParseUrl(String input) {
     final raw = input.trim();
     if (raw.isEmpty) return null;
@@ -31,6 +32,16 @@ class DownloadService {
     if (uri == null) return null;
     if (!uri.isScheme('http') && !uri.isScheme('https')) return null;
     if (uri.host.isEmpty) return null;
+    final host = uri.host.toLowerCase();
+    final isPrivate = host == 'localhost' ||
+        host.endsWith('.localhost') ||
+        host == '::1' ||
+        host.startsWith('127.') ||
+        host.startsWith('10.') ||
+        host.startsWith('192.168.') ||
+        host.startsWith('169.254.') ||
+        RegExp(r'^172\.(1[6-9]|2\d|3[01])\.').hasMatch(host);
+    if (isPrivate) return null;
     return uri;
   }
 

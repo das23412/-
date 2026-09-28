@@ -22,16 +22,13 @@ class CharsetDecoder {
     if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
       return _decodeUtf16(bytes.sublist(2), littleEndian: false);
     }
-    // UTF-16 无 BOM 猜测：前 64 字节中偶/奇位大量为 0
+    // UTF-16 无 BOM 猜测：按 LE/BE 各试解一次样本，可读字符占比高者胜。
+    // 旧启发式（大量 0x00）只对 ASCII 有效，中文正文（CJK 区两字节均非 0）判不出。
     if (bytes.length >= 64) {
-      final sample = bytes.sublist(0, 64);
-      int zeroEven = 0, zeroOdd = 0;
-      for (int i = 0; i < 32; i++) {
-        if (sample[i * 2] == 0) zeroEven++;
-        if (sample[i * 2 + 1] == 0) zeroOdd++;
-      }
-      if (zeroEven > 28) return _decodeUtf16(bytes, littleEndian: false);
-      if (zeroOdd > 28) return _decodeUtf16(bytes, littleEndian: true);
+      final le = _decodeUtf16(bytes.sublist(0, 64), littleEndian: true);
+      if (_looksLikeText(le)) return _decodeUtf16(bytes, littleEndian: true);
+      final be = _decodeUtf16(bytes.sublist(0, 64), littleEndian: false);
+      if (_looksLikeText(be)) return _decodeUtf16(bytes, littleEndian: false);
     }
     // UTF-8 严格解码失败：先尝试容忍解码（单字节损坏只产生个别替换符），
     // 替换率低于阈值才采用；否则整本回退 GBK，避免一本书毁于一处坏字节
@@ -58,6 +55,21 @@ class CharsetDecoder {
     } catch (_) {
       return gbk.decode(bytes);
     }
+  }
+
+  /// 样本文本可读性：CJK/ASCII/常见标点占比高且几乎无控制符即认为可读。
+  static bool _looksLikeText(String sample) {
+    if (sample.isEmpty) return false;
+    var good = 0;
+    for (final r in sample.runes) {
+      if (r == 0 ||
+          (r < 0x20 && r != 0x0A && r != 0x0D && r != 0x09) ||
+          (r >= 0xE000 && r <= 0xF8FF)) {
+        continue; // 控制符/私用区：不可读
+      }
+      good++;
+    }
+    return good / sample.runes.length > 0.85;
   }
 
   static String _decodeUtf16(List<int> bytes, {required bool littleEndian}) {

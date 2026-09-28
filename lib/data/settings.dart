@@ -13,8 +13,8 @@ class AppSettings {
 
   // ---------- 主题：0 跟随系统 / 1 浅色 / 2 深色 ----------
   static const _kThemeMode = 'theme_mode';
-  int get themeMode => _prefs.getInt(_kThemeMode) ?? 0;
-  set themeMode(int v) => _prefs.setInt(_kThemeMode, v);
+  int get themeMode => (_prefs.getInt(_kThemeMode) ?? 0).clamp(0, 2);
+  set themeMode(int v) => _prefs.setInt(_kThemeMode, v.clamp(0, 2));
 
   // ---------- 阅读器 ----------
   // 所有取值带范围钳制：历史/手工写入的越界值（如 lineHeight=0 导致除零）不再透传

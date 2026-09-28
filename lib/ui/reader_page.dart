@@ -1114,6 +1114,12 @@ class _ReaderPageState extends State<ReaderPage> {
   Future<void> _toggleBookmark() async {
     final layout = _layout;
     if (layout == null) return;
+    // 在线书正文可能尚未加载（pageCount 0），此时无法定位书签偏移
+    if (layout.pageCount == 0 || layout.lines.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('本章尚未加载完成，请稍候再试')));
+      return;
+    }
     final offset =
         layout.charOffsetOfLine(rs.currentPage * layout.linesPerPage);
     final existing = rs.bookmarks.where((b) =>

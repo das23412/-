@@ -85,7 +85,7 @@ class MainActivity : FlutterActivity() {
         val uri = intent.data ?: return
         // 大文件拷贝在后台线程执行：主线程 IO 会阻塞引擎启动乃至 ANR
         ioExecutor.execute {
-            val path = copyUriToCache(uri)
+            val path = copyUriToCache(uri, intent.type)
             runOnUiThread {
                 if (path == null) {
                     Log.e(TAG, "导入失败：无法拷贝 $uri（磁盘满、文件不可读或无权限）")
@@ -97,14 +97,31 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun copyUriToCache(uri: Uri): String? {
+    private fun copyUriToCache(uri: Uri, mimeType: String?): String? {
         return try {
             val name = queryDisplayName(uri)
                 ?: return null
-            val safe = name.replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fa5]"), "_")
-            if (!safe.contains('.')) return null // 不是可识别的文件名
+            var safe = name.replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fa5]"), "_")
+            // 无扩展名但 mimeType 可识别：按类型补扩展名，而不是丢弃
+            if (!safe.contains('.')) {
+                val ext = when {
+                    mimeType?.contains("epub") == true -> ".epub"
+                    mimeType?.contains("mobipocket") == true -> ".mobi"
+                    mimeType?.startsWith("text/") == true -> ".txt"
+                    else -> return null
+                }
+                safe += ext
+            }
             val dir = File(cacheDir, "moyue_import")
             if (!dir.exists()) dir.mkdirs()
+            // 缓存目录清理：只保留最近 20 个导入文件，防止无限增长
+            dir.listFiles()?.sortedBy { it.lastModified() }?.dropLast(20)?.forEach {
+                try { it.delete() } catch (_: Exception) {}
+            }
+            // 缓存目录清理：只保留最近 20 个导入文件，防止无限增长
+            dir.listFiles()?.sortedBy { it.lastModified() }?.dropLast(20)?.forEach {
+                try { it.delete() } catch (_: Exception) {}
+            }
             val dest = File(dir, "${System.currentTimeMillis()}_$safe")
             contentResolver.openInputStream(uri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }

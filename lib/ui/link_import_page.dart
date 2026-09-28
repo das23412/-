@@ -72,6 +72,7 @@ class _LinkImportPageState extends State<LinkImportPage> {
       _snack('链接探测失败：$e');
       return;
     }
+    if (!mounted) return;
     setState(() => _busy = false);
 
     // 2. 确认框

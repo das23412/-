@@ -126,8 +126,10 @@ class _GatePageState extends State<GatePage> {
             onError: (_) => false,
           );
       if (!legacyGranted && mounted) {
-        await _explainPermission();
-        await Permission.manageExternalStorage.request();
+        final agreed = await _explainPermission();
+        if (agreed) {
+          await Permission.manageExternalStorage.request();
+        }
       }
     }
 
@@ -168,8 +170,8 @@ class _GatePageState extends State<GatePage> {
     );
   }
 
-  Future<void> _explainPermission() {
-    return showDialog<void>(
+  Future<bool> _explainPermission() {
+    return showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
@@ -181,16 +183,16 @@ class _GatePageState extends State<GatePage> {
             '· 拒绝授权仍可使用“手动导入”功能'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.pop(ctx, false),
             child: const Text('暂不授权'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.pop(ctx, true),
             child: const Text('去授权'),
           ),
         ],
       ),
-    );
+    ).then((v) => v == true);
   }
 
   @override

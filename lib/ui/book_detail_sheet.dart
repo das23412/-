@@ -214,7 +214,7 @@ class _BookDetailSheetState extends State<BookDetailSheet> {
           _row('格式', '${b.format.displayName} · ${formatBytes(b.sizeBytes)}'),
           _row('章节', b.chapterCount > 0 ? '${b.chapterCount} 章' : '未解析'),
           _row('字数', b.wordCount > 0 ? '${_fmtNum(b.wordCount)} 字' : '未解析'),
-          _row('添加时间', formatTimeCN(b.addedAt)),
+          _row('添加时间', formatDateTimeCN(b.addedAt)),
           _row('最近阅读', formatTimeCN(b.lastReadAt)),
           if (b.tags.isNotEmpty) _row('标签', b.tagList.join('、')),
           const Divider(height: 24),

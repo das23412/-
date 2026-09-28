@@ -30,7 +30,14 @@ class MobiParser {
     }
     final recordOffsets = List<int>.filled(numRecords + 1, bytes.length);
     for (int i = 0; i < numRecords; i++) {
-      recordOffsets[i] = bd.getUint32(78 + i * 8);
+      final off = bd.getUint32(78 + i * 8);
+      // 单调递增且不越界：损坏文件抛友好错误而不是裸 RangeError
+      if (off < 78 + numRecords * 8 + 2 ||
+          off > bytes.length ||
+          (i > 0 && off <= recordOffsets[i - 1])) {
+        throw const FormatException('MOBI 记录表损坏（偏移非法）');
+      }
+      recordOffsets[i] = off;
     }
     recordOffsets[numRecords] = bytes.length;
 
@@ -46,6 +53,7 @@ class MobiParser {
     }
 
     String encodingName = 'utf8';
+    int mobiVersion = 0;
     int extraFlags = 0;
     // MOBI 扩展头
     if (rec0.length >= 24 &&
@@ -56,10 +64,15 @@ class MobiParser {
       final textEncoding = r0.getUint32(28);
       encodingName =
           textEncoding == 1252 ? 'windows1252' : (textEncoding == 65001 ? 'utf8' : 'gbk');
-      // extra data flags：2 字节，位于 record0 偏移 16+0xF2（MOBI 头内 0xF2）
-      if (mobiHeaderLen >= 0xF2 + 2 && rec0.length >= 16 + 0xF2 + 2) {
-        extraFlags = r0.getUint16(16 + 0xF2);
+      if (rec0.length >= 0x68 + 4) {
+        mobiVersion = r0.getUint32(0x68);
       }
+      // extra data flags：2 字节大端，位于 record0 绝对偏移 0xF2。
+      // 存在条件（参照 mobidedrm）：mobiHeaderLen >= 0xE4 且 mobiVersion >= 5。
+      if (mobiHeaderLen >= 0xE4 && mobiVersion >= 5 && rec0.length >= 0xF2 + 2) {
+        extraFlags = r0.getUint16(0xF2);
+      }
+    }
     }
 
     // 简易 Latin-1（兼容 western 1252 主体区间）
@@ -140,48 +153,45 @@ class MobiParser {
 
   /// 去除记录尾部的 extra data（trailing entries + multibyte overlap）。
   ///
-  /// 语义参照 DeDRM_tools 的 mobidedrm.py：
-  /// - bit 0 = multibyte overlap：末字节低 2 位 + 1 个字节，先于其他条目裁剪；
-  /// - bit 1..15：每个置位的 bit 对应一个 trailing entry，按 bit 从低到高的顺序
-  ///   从尾部裁剪。每个 entry 的大小以"反向变长整数"编码存在尾部：
-  ///   从末尾向前逐字节读，低 7 位为一组、越早读到的字节位权越高
-  ///   （即存储时最高位组离尾部最远），最高位字节为 1 表示变长整数结束；
-  ///   解码出的值 = entry 数据字节数，裁剪量 = 变长整数本身字节数 + 值。
+  /// 语义逐行对照 DeDRM_tools mobidedrm.py 的 getSizeOfTrailingDataEntries：
+  /// - bit 1..15（从低到高）：每个置位 bit 对应一个反向变长整数 entry，
+  ///   从 `ptr[size-num-1]`（尾字节）向前读，【尾字节是最低 7 位】，
+  ///   位权每次 +7；高位字节终止并计入该组；解码值 = 该 entry 的字节数；
+  /// - bit 0 = multibyte overlap：位于所有 entry 之前，
+  ///   `(倒数第 num+1 字节 & 0x3) + 1` 个字节；
+  /// - 总裁剪量 = 各 entry 值之和 + multibyte 字节数。
   static List<int> _trimTrailing(List<int> data, int flags) {
     if (flags == 0 || data.isEmpty) return data;
-    var end = data.length;
-
-    // bit 0：multibyte overlap，位于最末尾
-    if (flags & 1 != 0 && end > 0) {
-      end -= (data[end - 1] & 0x3) + 1;
-      if (end < 0) return data;
-    }
-
-    // bit 1..15：按从低到高的顺序处理每个置位 bit
-    for (int bit = 1; bit < 16; bit++) {
-      if (flags & (1 << bit) == 0) continue;
-      // 反向变长整数：从当前末尾向前读（规格上限 4 字节）
-      int numbytes = 0;
-      int bits = 0;
-      while (true) {
-        final idx = end - 1 - numbytes;
-        if (idx < 0 || numbytes >= 4) return data; // 数据异常：放弃裁剪
-        numbytes++;
-        bits += 7;
-        if (data[idx] & 0x80 != 0) {
-          bits -= 7;
-          break;
-        }
+    var num = 0;
+    var testflags = flags >> 1;
+    while (testflags != 0) {
+      if (testflags & 1 != 0) {
+        num += _sizeOfTrailingDataEntry(data, data.length - num);
       }
-      int value = 0;
-      for (int n2 = 0; n2 < numbytes; n2++) {
-        value += (data[end - 1 - n2] & 0x7F) << bits;
-        bits -= 7;
-      }
-      end -= numbytes + value;
-      if (end < 0) return data;
+      testflags >>= 1;
     }
-    return data.sublist(0, end);
+    if (flags & 1 != 0 && data.length - num - 1 >= 0) {
+      num += (data[data.length - num - 1] & 0x3) + 1;
+    }
+    if (num <= 0 || num > data.length) return data; // 畸形防御
+    return data.sublist(0, data.length - num);
+  }
+
+  /// mobidedrm getSizeOfTrailingDataEntry：尾字节最低 7 位起，向前位权 +7；
+  /// 高位字节终止（其 7 位计入）；bitpos 上限 28（最多 4 字节）。
+  static int _sizeOfTrailingDataEntry(List<int> ptr, int size) {
+    var bitpos = 0;
+    var result = 0;
+    if (size <= 0) return result;
+    while (true) {
+      final v = ptr[size - 1];
+      result |= (v & 0x7F) << bitpos;
+      bitpos += 7;
+      size -= 1;
+      if ((v & 0x80) != 0 || bitpos >= 28 || size == 0) {
+        return result;
+      }
+    }
   }
 
   /// 供单元测试使用的公开包装。

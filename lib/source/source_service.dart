@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:html/dom.dart';
 
 import 'book_source.dart';
@@ -125,7 +127,8 @@ class SourceService {
   }
 
   /// 多源搜索：并发执行（默认最多 6 个源同时请求），单源失败/超时被隔离，
-  /// 返回成功的结果与失败原因。
+  /// 返回成功的结果与失败原因。请求与解析在隔离线程执行
+  /// （书源 ##正则## 可能灾难性回溯，不能跑 UI 线程）。
   static Future<(List<SourceBook>, Map<String, String>)> searchAll(
     List<BookSource> sources,
     String keyword, {
@@ -159,7 +162,28 @@ class SourceService {
     return (results, errors);
   }
 
+  /// 搜索（隔离线程执行：书源正则可能灾难性回溯，不能冻结 UI）。
   static Future<List<SourceBook>> search(BookSource s, String keyword,
+      {int page = 1}) {
+    return compute(_searchJob, {
+      'raw': s.rawJson,
+      'keyword': keyword,
+      'page': page,
+    }).timeout(const Duration(minutes: 1));
+  }
+
+  /// 隔离线程搜索入口（顶层函数，compute 目标）。
+  static Future<List<SourceBook>> _searchJob(Map<String, Object?> job) async {
+    final raw = job['raw'] as String;
+    final decoded = jsonDecode(raw);
+    final source =
+        decoded is Map<String, dynamic> ? BookSource.fromLegadoJson(decoded) : null;
+    if (source == null) throw const SourceException('书源数据损坏');
+    return _searchSync(source, job['keyword'] as String, job['page'] as int);
+  }
+
+  /// 同步搜索：构建请求 → 抓取 → 解析（供隔离线程调用）。
+  static Future<List<SourceBook>> _searchSync(BookSource s, String keyword,
       {int page = 1}) async {
     final req = buildSearchRequest(s, keyword, page);
     final resp = await SourceHttp.request(
@@ -257,8 +281,19 @@ class SourceService {
     );
   }
 
-  /// 拉取完整目录（自动翻目录页，最多 50 页防失控）。
-  static Future<List<SourceChapter>> loadToc(BookSource s, String tocUrl) async {
+  /// 拉取完整目录（自动翻目录页，最多 50 页防失控）。隔离线程执行。
+  static Future<List<SourceChapter>> loadToc(BookSource s, String tocUrl) {
+    return compute(_tocJob, {'raw': s.rawJson, 'url': tocUrl})
+        .timeout(const Duration(minutes: 2));
+  }
+
+  static Future<List<SourceChapter>> _tocJob(Map<String, String> job) async {
+    final source = BookSource.fromLegadoJson(jsonDecode(job['raw']!));
+    if (source == null) throw const SourceException('书源数据损坏');
+    return SourceService.loadTocSync(source, job['url']!);
+  }
+
+  static Future<List<SourceChapter>> loadTocSync(BookSource s, String tocUrl) async {
     if (s.tocRules.chapterList.isEmpty) {
       throw const SourceException('书源缺少目录列表规则');
     }

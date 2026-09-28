@@ -41,10 +41,15 @@ Uint8List buildMobi(
   final current = b.length;
   b.add(List<int>.filled(headerLength - (current - 16), 0));
   final record0 = b.toBytes();
-  // extra data flags：2 字节 @ record0 偏移 16+0xF2（大端）
-  final flagsOffset = 16 + 0xF2;
+  // extra data flags：2 字节大端 @ record0 绝对偏移 0xF2
+  final flagsOffset = 0xF2;
   record0[flagsOffset] = (extraFlags >> 8) & 0xFF;
   record0[flagsOffset + 1] = extraFlags & 0xFF;
+  // MOBI header version @ 绝对偏移 0x68（flags 存在条件之一是 version >= 5）
+  record0[0x68] = 0;
+  record0[0x69] = 0;
+  record0[0x6A] = 0;
+  record0[0x6B] = 6; // version 6
 
   final records = <List<int>>[record0, ...textRecords];
 
@@ -116,24 +121,26 @@ void main() {
       expect(MobiParser.trimTrailingForTest(body, 0), body);
     });
 
-    test('multibyte overlap（bit 0，位于最末尾）', () {
+    test('multibyte overlap（bit 0，位于 trailing entries 之前）', () {
       final body = utf8('正文内容');
+      // flags=1 → multibyte：(倒数第 1 字节 & 0x3) + 1 = 3 字节
       final data = [...body, 0xAA, 0xBB, 0x02];
       expect(MobiParser.trimTrailingForTest(data, 1), body);
     });
 
-    test('单字节反向变长整数（值 2 → 裁掉 1+2 字节）', () {
+    test('单字节反向变长整数（尾字节=低位：值 2 → 裁 2 字节）', () {
       final body = utf8('正文');
-      // entry 大小 2：变长整数 [0x82]（高位 1 + 值 2），后跟 2 字节 payload
-      final data = [...body, 0xAA, 0xBB, 0x82];
+      // entry：文件序 [0xAA(payload), 0x82(终止字节, 低 7 位=2)]
+      // 解码值 2 = 该 entry 总字节数（含变长整数本身）
+      final data = [...body, 0xAA, 0x82];
       expect(MobiParser.trimTrailingForTest(data, 2), body);
     });
 
-    test('双字节反向变长整数（值 130 → 裁掉 2+130 字节）', () {
+    test('双字节反向变长整数（值 130 → 裁 130 字节）', () {
       final body = utf8('正文');
-      // 值 130：低 7 位组 2（|0x80），高 7 位组 1 → 文件序 [0x82, 0x01]
-      final payload = List<int>.filled(130, 0xAA);
-      final data = [...body, ...payload, 0x82, 0x01];
+      // 值 130：尾字节=低 7 位(2)，前一字节=高 7 位(1)|0x80 → 文件序 [0x81, 0x02]
+      final payload = List<int>.filled(128, 0xAA);
+      final data = [...body, ...payload, 0x81, 0x02];
       expect(MobiParser.trimTrailingForTest(data, 2), body);
     });
 
@@ -189,8 +196,8 @@ void main() {
 
     test('extraFlags（2 字节 @0xF2）正确读取并裁剪尾部', () {
       // headerLength 默认 0xF8 覆盖 0xF2；flags bit1 → 记录尾部
-      // [0xAA, 0xBB, 0x82]（entry 大小 2 的反向变长整数 + 2 字节 payload）
-      final rec = [...utf8('第1章 起点\n主角出场了。'), 0xAA, 0xBB, 0x82];
+      // [0xAA, 0x82]：反向变长整数（终止字节低 7 位=2）+ 1 字节 payload
+      final rec = [...utf8('第1章 起点\n主角出场了。'), 0xAA, 0x82];
       file.writeAsBytesSync(
           buildMobi([rec], extraFlags: 2));
       final book = MobiParser.parse(file);

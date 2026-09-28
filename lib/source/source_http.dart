@@ -80,9 +80,23 @@ class SourceHttp {
       }
       final bytes = builder.takeBytes();
       final contentType = resp.headers.value('content-type') ?? '';
-      final effectiveCharset =
-          charset ?? _charsetFromContentType(contentType);
-      final text = _decode(bytes, effectiveCharset);
+      var effectiveCharset = charset ?? _charsetFromContentType(contentType);
+      var text = _decode(bytes, effectiveCharset);
+      // 无 charset 头时嗅探 HTML meta 标签（GBK 站点常见只写 meta 不写头）：
+      // 声明了 GBK 就用声明编码重解（meta 之前的字节解码错位可接受）
+      if (effectiveCharset == null && !contentType.contains('json')) {
+        final head = text.length > 2048 ? text.substring(0, 2048) : text;
+        final m = RegExp(
+                r"<meta[^>]+charset=[\"']?\s*([\w-]+)",
+                caseSensitive: false)
+            .firstMatch(head);
+        if (m != null) {
+          final declared = m.group(1)!.toLowerCase();
+          if (declared.contains('gb')) {
+            text = _decode(bytes, declared);
+          }
+        }
+      }
       final isJson = contentType.contains('json') ||
           text.trimLeft().startsWith('{') ||
           text.trimLeft().startsWith('[');

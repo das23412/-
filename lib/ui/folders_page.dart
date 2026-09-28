@@ -108,10 +108,9 @@ class _FoldersPageState extends State<FoldersPage> {
           OutlinedButton.icon(
             onPressed: () async {
               final n = await widget.library.resetIgnoredPaths();
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text(n == 0 ? '没有忽略中的文件' : '已重置 $n 个被忽略的文件，下次扫描会重新提示')));
-              }
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(n == 0 ? '没有忽略中的文件' : '已重置 $n 个被忽略的文件，下次扫描会重新提示')));
               setState(() {});
             },
             icon: const Icon(Icons.restart_alt),

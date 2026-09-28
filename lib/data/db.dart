@@ -208,6 +208,7 @@ class AppDb {
   }
 
   Future<void> deleteBooks(List<int> ids) async {
+    if (ids.isEmpty) return; // 空列表会生成非法的 IN ()
     final db = await database;
     final q = ids.map((_) => '?').join(',');
     await db.delete('books', where: 'id IN ($q)', whereArgs: ids);

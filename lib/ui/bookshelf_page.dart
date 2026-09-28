@@ -380,7 +380,9 @@ class _BookshelfPageState extends State<BookshelfPage> {
             if (lib.scanRestricted && !lib.scanning) _permissionBanner(lib),
             Expanded(
               child: shown.isEmpty
-                  ? _empty(context, lib)
+                  ? (lib.books.isEmpty
+                      ? _empty(context, lib)
+                      : _noMatch(context, lib))
                   : RefreshIndicator(
                       onRefresh: () => lib.scan(fullScan: true),
                       child: GridView.builder(
@@ -684,6 +686,32 @@ class _BookshelfPageState extends State<BookshelfPage> {
             onPressed: _showImportSheet,
             icon: const Icon(Icons.add),
             label: const Text('添加书籍'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 过滤后无结果（书架本身不空）：与真正的空书架区分开。
+  Widget _noMatch(BuildContext context, LibraryState lib) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.search_off, size: 64, color: Theme.of(context).hintColor),
+          const SizedBox(height: 12),
+          const Text('没有匹配的书籍'),
+          const SizedBox(height: 6),
+          Text('关键词或标签过滤了全部 ${lib.books.length} 本藏书',
+              style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () {
+              lib.setSearch('');
+              lib.setActiveTag(null);
+            },
+            icon: const Icon(Icons.clear),
+            label: const Text('清除过滤'),
           ),
         ],
       ),

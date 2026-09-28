@@ -188,10 +188,11 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     }
     try {
       // 正文抓取+解析+净化全部在隔离线程执行：书源畸形正则不再冻结 UI
+      // 恶意书源正则可能让 isolate 永久挂起：超时后本章标记失败可重试
       final text = await compute(loadContentInIsolate, {
         'raw': source.rawJson,
         'url': _chapterUrls[idx],
-      });
+      }).timeout(const Duration(minutes: 1));
       _applyChapterText(idx, text);
       await _db.saveContent(book.id!, idx, text, url: _chapterUrls[idx]);
     } catch (e) {
@@ -216,6 +217,19 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     chapters[idx] = ParsedChapter(chapters[idx].title, text);
     _recomputeOffsets();
     _layouts.remove(idx); // 该章文本变化，旧布局作废
+    _pruneOnlineMemory(idx);
+  }
+
+  /// 在线书正文内存上限：只保留当前章 ±20 章的正文，更远的章节
+  /// 卸载正文（progress 已存库，再次进入会重新从缓存加载）。
+  void _pruneOnlineMemory(int center) {
+    if (!book.isOnline) return;
+    const keep = 20;
+    for (int i = 0; i < chapters.length; i++) {
+      if ((i - center).abs() > keep && chapters[i].text.isNotEmpty) {
+        chapters[i] = ParsedChapter(chapters[i].title, '');
+      }
+    }
   }
 
   void _recomputeOffsets() {

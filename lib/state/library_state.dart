@@ -206,13 +206,13 @@ class LibraryState extends ChangeNotifier {
   int get ignoredCount => settings.ignoredScanPaths.length;
 
   /// 清理已失效的引用（原文件被删除的书）。在线书没有本地文件，跳过。
+  /// existsSync 逐本检查在隔离线程执行，千本书不卡 UI。
   Future<int> cleanMissing() async {
-    final missing = <String>[];
-    for (final b in books) {
-      if (!b.isOnline && !b.imported && !File(b.path).existsSync()) {
-        missing.add(b.path);
-      }
-    }
+    final candidates = books
+        .where((b) => !b.isOnline && !b.imported)
+        .map((b) => b.path)
+        .toList();
+    final missing = await compute(_findMissingFiles, candidates);
     await _db.removeBooksByPaths(missing);
     await reload();
     return missing.length;
@@ -422,4 +422,9 @@ class LibraryState extends ChangeNotifier {
     activeTag = tag;
     notifyListeners();
   }
+}
+
+/// 逐本检查文件是否存在（隔离线程执行，compute 目标须为顶层函数）。
+List<String> _findMissingFiles(List<String> paths) {
+  return paths.where((p) => !File(p).existsSync()).toList();
 }
