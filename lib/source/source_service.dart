@@ -179,7 +179,8 @@ class SourceService {
     final source =
         decoded is Map<String, dynamic> ? BookSource.fromLegadoJson(decoded) : null;
     if (source == null) throw const SourceException('书源数据损坏');
-    return _searchSync(source, job['keyword'] as String, job['page'] as int);
+    return _searchSync(
+        source, job['keyword'] as String, page: job['page'] as int);
   }
 
   /// 同步搜索：构建请求 → 抓取 → 解析（供隔离线程调用）。

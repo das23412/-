@@ -87,7 +87,7 @@ class SourceHttp {
       if (effectiveCharset == null && !contentType.contains('json')) {
         final head = text.length > 2048 ? text.substring(0, 2048) : text;
         final m = RegExp(
-                r"<meta[^>]+charset=[\"']?\s*([\w-]+)",
+                '<meta[^>]+charset\\s*=\\s*["\']?\\s*([\\w-]+)',
                 caseSensitive: false)
             .firstMatch(head);
         if (m != null) {

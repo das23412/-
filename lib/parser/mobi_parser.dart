@@ -175,6 +175,10 @@ class MobiParser {
     return data.sublist(0, data.length - num);
   }
 
+  /// 供单元测试使用的公开包装。
+  static List<int> trimTrailingForTest(List<int> data, int flags) =>
+      _trimTrailing(data, flags);
+
   /// mobidedrm getSizeOfTrailingDataEntry：尾字节最低 7 位起，向前位权 +7；
   /// 高位字节终止（其 7 位计入）；bitpos 上限 28（最多 4 字节）。
   static int _sizeOfTrailingDataEntry(List<int> ptr, int size) {
