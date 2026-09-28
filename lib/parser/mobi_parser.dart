@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../core/charset.dart';
+import 'chapter_splitter.dart';
 import 'parser.dart';
 
 /// HUFF/CDIC 压缩的 MOBI 暂不支持。
@@ -109,37 +110,18 @@ class MobiParser {
       ParsedChapter(title, text);
 
   /// MOBI 正文切章：对每一段的第一行做章节标题识别。
-  /// 正则提升为常量：逐行循环里每次新建 RegExp 是纯浪费。
+  /// 正则提升为常量；切分逻辑统一在 ChapterSplitter（三格式共用）。
   static final RegExp _chapterMarkCn =
       RegExp(r'^第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷部篇]');
   static final RegExp _chapterMarkEn = RegExp(r'^chapter\s+\d+', caseSensitive: false);
 
   static List<ParsedChapter> _splitMobiChapters(String text) {
-    // 动态导入会导致循环依赖，这里复制精简版判断
-    final lines = text.split('\n');
-    final marks = <int>[];
-    for (int i = 0; i < lines.length; i++) {
-      final t = lines[i].trim();
-      if (t.isEmpty || t.length > 50) continue;
-      if (t.startsWith('第') && _chapterMarkCn.hasMatch(t)) {
-        marks.add(i);
-      } else if (_chapterMarkEn.hasMatch(t)) {
-        marks.add(i);
-      }
-    }
-    if (marks.length < 2) return [];
-    final chapters = <ParsedChapter>[];
-    if (marks.first > 0) {
-      final head = lines.sublist(0, marks.first).join('\n').trim();
-      if (head.isNotEmpty) chapters.add(ParsedChapter('开篇', head));
-    }
-    for (int m = 0; m < marks.length; m++) {
-      final start = marks[m];
-      final end = m + 1 < marks.length ? marks[m + 1] : lines.length;
-      final body = lines.sublist(start + 1, end).join('\n').trim();
-      chapters.add(ParsedChapter(lines[start].trim(), body));
-    }
-    return chapters;
+    final parts = ChapterSplitter.split(
+      text: text,
+      bookTitle: '',
+      titlePatterns: [_chapterMarkCn, _chapterMarkEn],
+    );
+    return parts.map((p) => ParsedChapter(p.title, p.body)).toList();
   }
 
   static String _stripToText(String html) {

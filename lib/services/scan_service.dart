@@ -179,4 +179,8 @@ class ScanService {
 
   /// 全盘扫描主根（保留常量供外部引用）。
   static String get primaryRoot => '/storage/emulated/0';
+
+  /// 供单元测试验证目录跳过规则（含存储根顶层 android 的特例）。
+  static bool shouldSkipDirForTest(String name, String dirPath) =>
+      _shouldSkipDir(name, dirPath);
 }

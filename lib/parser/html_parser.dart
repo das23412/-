@@ -2,6 +2,7 @@ import 'dart:io';
 
 import '../core/charset.dart';
 import '../core/text_utils.dart';
+import 'chapter_splitter.dart';
 import 'parser.dart';
 
 /// 单个 HTML 文件小说解析。
@@ -43,31 +44,19 @@ class HtmlParser {
     return null;
   }
 
+  /// HTML 章节切分：逻辑统一在 ChapterSplitter（三格式共用）。
+  static final RegExp _chapterMark =
+      RegExp(r'^第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷部篇]');
+
   static List<ParsedChapter> _splitByChapterLines(String title, String text) {
-    final lines = text.split('\n');
-    final marks = <int>[];
-    for (int i = 0; i < lines.length; i++) {
-      final t = lines[i].trim();
-      if (t.isEmpty || t.length > 50) continue;
-      if (t.startsWith('第') &&
-          RegExp(r'^第\s*[0-9〇零一二两三四五六七八九十百千万]+\s*[章节回卷部篇]').hasMatch(t)) {
-        marks.add(i);
-      }
-    }
-    if (marks.length < 2) {
+    final parts = ChapterSplitter.split(
+      text: text,
+      bookTitle: title,
+      titlePatterns: [_chapterMark],
+    );
+    if (parts.isEmpty) {
       return [ParsedChapter(title.isEmpty ? '正文' : title, text)];
     }
-    final chapters = <ParsedChapter>[];
-    if (marks.first > 0) {
-      final head = lines.sublist(0, marks.first).join('\n').trim();
-      if (head.isNotEmpty) chapters.add(ParsedChapter('开篇', head));
-    }
-    for (int m = 0; m < marks.length; m++) {
-      final start = marks[m];
-      final end = m + 1 < marks.length ? marks[m + 1] : lines.length;
-      chapters.add(ParsedChapter(
-          lines[start].trim(), lines.sublist(start + 1, end).join('\n').trim()));
-    }
-    return chapters;
+    return parts.map((p) => ParsedChapter(p.title, p.body)).toList();
   }
 }

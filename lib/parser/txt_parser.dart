@@ -2,6 +2,7 @@ import 'dart:io';
 
 import '../core/charset.dart';
 import '../core/text_utils.dart';
+import 'chapter_splitter.dart';
 import 'parser.dart';
 
 /// TXT 文件解析：编码识别 + 章节切分。
@@ -47,97 +48,16 @@ class TxtParser {
         file.uri.pathSegments.last), text));
   }
 
-  /// 将整本文字切分为章节。
-  ///
-  /// 若几乎检测不到章节（如纯文本散文），则按固定字数切成大块，避免单章过长。
+  /// 将整本文字切分为章节（逻辑统一在 ChapterSplitter，三格式共用）。
   static List<ParsedChapter> splitChapters(String bookTitle, String text) {
-    final lines = text.split('\n');
-    final marks = <int>[]; // 章节起始行号
-    int consecutive = 0;
-    for (int i = 0; i < lines.length; i++) {
-      if (looksLikeChapterTitle(lines[i])) {
-        marks.add(i);
-        consecutive++;
-        // 跳过紧随其后的空行不会误判；连续命中也允许（有的书每章占两行标题）
-        if (consecutive > lines.length ~/ 2) break; // 全书都是短行，误判，放弃
-      } else {
-        consecutive = 0;
-      }
-    }
-    // 命中的行号列表：把"目录页"的密集假标题折叠掉——
-    // 连续 3 个及以上、彼此间隔 ≤2 行的标题行（目录块）只保留第一个
-    final collapsed = <int>[];
-    int prev = -10;
-    int runLen = 0;
-    for (final m in marks) {
-      if (m - prev > 2) {
-        // 与前一个命中间隔过大：先结算上一个 run（≥3 才折叠），再开新 run
-        if (runLen >= 3) {
-          collapsed.removeRange(collapsed.length - (runLen - 1), collapsed.length);
-        }
-        runLen = 1;
-      } else {
-        runLen++;
-      }
-      collapsed.add(m);
-      prev = m;
-    }
-    if (runLen >= 3) {
-      collapsed.removeRange(collapsed.length - (runLen - 1), collapsed.length);
-    }
-    marks
-      ..clear()
-      ..addAll(collapsed);
-
-    // 几乎检测不到章节（如纯文本散文）时按固定字数切块。
-    // 注意：不能额外按"标题行占比"放弃切分——正常小说的章节远比行数稀疏，
-    // 占比规则会把好书整本切成大块。
-    if (marks.length < 2) {
-      return _chunkBySize(bookTitle, text);
-    }
-    final chapters = <ParsedChapter>[];
-    // 第一章之前的文字（若有）作为“开篇”
-    if (marks.first > 0) {
-      final head = lines.sublist(0, marks.first).join('\n').trim();
-      if (head.isNotEmpty) chapters.add(ParsedChapter('开篇', head));
-    }
-    for (int m = 0; m < marks.length; m++) {
-      final start = marks[m];
-      final end = m + 1 < marks.length ? marks[m + 1] : lines.length;
-      final title = lines[start].trim();
-      final bodyLines = lines.sublist(start + 1, end);
-      final body = bodyLines.join('\n').trim();
-      chapters.add(ParsedChapter(title, body));
-    }
-    if (chapters.isEmpty) return _chunkBySize(bookTitle, text);
-    return chapters;
-  }
-
-  /// 无章节时按约 6000 字切块。
-  static List<ParsedChapter> _chunkBySize(String bookTitle, String text) {
-    const size = 6000;
-    if (text.length <= size) {
-      return [ParsedChapter(bookTitle.isEmpty ? '正文' : bookTitle, text)];
-    }
-    final chapters = <ParsedChapter>[];
-    final paragraphs = text.split('\n');
-    final buf = StringBuffer();
-    int count = 0;
-    int idx = 1;
-    for (final p in paragraphs) {
-      buf.writeln(p);
-      count += p.length;
-      if (count >= size) {
-        chapters.add(ParsedChapter('第$idx部分', buf.toString().trim()));
-        idx++;
-        buf.clear();
-        count = 0;
-      }
-    }
-    final rest = buf.toString().trim();
-    if (rest.isNotEmpty) {
-      chapters.add(ParsedChapter('第$idx部分', rest));
-    }
-    return chapters;
+    final parts = ChapterSplitter.split(
+      text: text,
+      bookTitle: bookTitle,
+      titlePatterns: chapterPatterns,
+      collapseTocRuns: true,
+      chunkFallback: true,
+      bookTitleFallback: '正文',
+    );
+    return parts.map((p) => ParsedChapter(p.title, p.body)).toList();
   }
 }
