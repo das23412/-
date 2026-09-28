@@ -62,12 +62,16 @@ class CharsetDecoder {
     if (sample.isEmpty) return false;
     var good = 0;
     for (final r in sample.runes) {
-      if (r == 0 ||
-          (r < 0x20 && r != 0x0A && r != 0x0D && r != 0x09) ||
-          (r >= 0xE000 && r <= 0xF8FF)) {
-        continue; // 控制符/私用区：不可读
+      // 可读 = ASCII 可打印 / CJK 统一表意 / CJK 标点 / 全角形式 / 常见空白。
+      // 注意不能把"非控制符"当可读：ASCII 文本被按 UTF-16 解码会产生
+      // 大量 CJK 部首扩展区的怪符号，宽松判定会把纯 ASCII 误判成 UTF-16。
+      if ((r >= 0x20 && r <= 0x7E) ||
+          (r >= 0x4E00 && r <= 0x9FFF) ||
+          (r >= 0x3000 && r <= 0x303F) ||
+          (r >= 0xFF00 && r <= 0xFFEF) ||
+          r == 0x0A || r == 0x0D || r == 0x09) {
+        good++;
       }
-      good++;
     }
     return good / sample.runes.length > 0.85;
   }
