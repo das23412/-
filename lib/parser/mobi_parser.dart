@@ -73,9 +73,7 @@ class MobiParser {
         extraFlags = r0.getUint16(0xF2);
       }
     }
-    }
 
-    // 简易 Latin-1（兼容 western 1252 主体区间）
     // 文本记录是连续字节流按 4KB 切分的片段：必须先收集全部字节、
     // 最后整体解码一次。逐记录解码会把跨越边界的多字节汉字切碎，
     // 解码失败后整条记录回退 GBK，产生成段乱码。
@@ -193,10 +191,6 @@ class MobiParser {
       }
     }
   }
-
-  /// 供单元测试使用的公开包装。
-  static List<int> trimTrailingForTest(List<int> data, int flags) =>
-      _trimTrailing(data, flags);
 }
 
 /// PalmDOC（LZ77 变体）解压。
