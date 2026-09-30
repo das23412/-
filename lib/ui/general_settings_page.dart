@@ -5,7 +5,6 @@ import '../data/settings.dart';
 import '../platform/install_channel.dart';
 import '../services/update_service.dart';
 import 'common.dart';
-import 'source_manage_page.dart';
 
 /// 通用设置页：联网开关、版本与更新。
 class GeneralSettingsPage extends StatefulWidget {
@@ -135,31 +134,6 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
             ),
           ),
           const SizedBox(height: 16),
-          // 书源
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.source_outlined),
-                  title: const Text('书源管理'),
-                  subtitle: const Text('导入 Legado 书源、启用/禁用、检测可用性'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SourceManagePage()),
-                  ),
-                ),
-                SwitchListTile(
-                  value: AppSettings.instance.allowSources,
-                  onChanged: (v) {
-                    setState(() => AppSettings.instance.allowSources = v);
-                  },
-                  title: const Text('允许书源联网'),
-                  subtitle: const Text('默认关闭。书源的搜索/目录/正文请求需要此开关。'),
-                ),
-              ],
-            ),
-          ),
           const SizedBox(height: 16),
           // 版本与更新
           Card(

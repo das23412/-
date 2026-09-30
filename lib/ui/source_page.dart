@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -7,17 +5,16 @@ import 'package:provider/provider.dart';
 import '../data/settings.dart';
 import '../state/source_state.dart';
 import 'source_check_page.dart';
-import 'source_search_page.dart';
 
-/// 书源管理：列表、导入、启用/禁用、删除、入口到搜索与检测。
-class SourceManagePage extends StatefulWidget {
-  const SourceManagePage({super.key});
+/// 书源 tab：书源导入 / 启用禁用 / 删除 / 联网总开关 / 检测入口。
+class SourcePage extends StatefulWidget {
+  const SourcePage({super.key});
 
   @override
-  State<SourceManagePage> createState() => _SourceManagePageState();
+  State<SourcePage> createState() => _SourcePageState();
 }
 
-class _SourceManagePageState extends State<SourceManagePage> {
+class _SourcePageState extends State<SourcePage> {
   @override
   void initState() {
     super.initState();
@@ -128,33 +125,15 @@ class _SourceManagePageState extends State<SourceManagePage> {
     final state = context.watch<SourceState>();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('书源管理'),
+        title: const Text('书源'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.travel_explore),
+            icon: const Icon(Icons.fact_check_outlined),
             tooltip: '书源检测',
             onPressed: state.sources.isEmpty
                 ? null
                 : () => Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const SourceCheckPage())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.search),
-            tooltip: '书源搜索',
-            onPressed: state.enabledSources.isEmpty
-                ? null
-                : () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const SourceSearchPage())),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (v) {
-              if (v == 'import') _showImportSheet();
-            },
-            itemBuilder: (ctx) => const [
-              PopupMenuItem(value: 'import', child: Text('导入书源')),
-            ],
           ),
         ],
       ),
@@ -165,7 +144,7 @@ class _SourceManagePageState extends State<SourceManagePage> {
       ),
       body: Column(
         children: [
-          // 联网开关
+          // 联网总开关（书源功能的唯一入口）
           Container(
             margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             decoration: BoxDecoration(

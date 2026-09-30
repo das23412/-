@@ -13,7 +13,6 @@ import 'folders_page.dart';
 import 'general_settings_page.dart';
 import 'link_import_page.dart';
 import 'reader_page.dart';
-import 'source_search_page.dart';
 
 /// 书架主页。
 class BookshelfPage extends StatefulWidget {
@@ -266,25 +265,6 @@ class _BookshelfPageState extends State<BookshelfPage> {
               onTap: () {
                 Navigator.pop(ctx);
                 lib.scan(fullScan: true);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.public),
-              title: const Text('从书源搜索在线书籍'),
-              subtitle: const Text('按导入的书源搜索，在线阅读（需打开书源联网）'),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const SourceSearchPage()));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('管理扫描文件夹'),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => FoldersPage(library: lib)));
               },
             ),
             ListTile(

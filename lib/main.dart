@@ -12,7 +12,7 @@ import 'state/library_state.dart';
 import 'state/reader_config.dart';
 import 'state/source_state.dart';
 import 'state/theme_state.dart';
-import 'ui/bookshelf_page.dart';
+import 'ui/shell_page.dart';
 import 'ui/reader_page.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -197,6 +197,6 @@ class _GatePageState extends State<GatePage> {
 
   @override
   Widget build(BuildContext context) {
-    return const BookshelfPage();
+    return const ShellPage();
   }
 }
