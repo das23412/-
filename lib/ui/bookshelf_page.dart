@@ -268,6 +268,23 @@ class _BookshelfPageState extends State<BookshelfPage> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.manage_search),
+              title: const Text('全盘扫描手机里的小说'),
+              onTap: () {
+                Navigator.pop(ctx);
+                lib.scan(fullScan: true);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('管理扫描文件夹'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => FoldersPage(library: lib)));
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.cleaning_services_outlined),
               title: const Text('清理已丢失的书籍'),
               subtitle: const Text('原文件被删除的书会从书架移除'),
