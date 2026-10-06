@@ -26,7 +26,7 @@ class ReaderPage extends StatefulWidget {
   State<ReaderPage> createState() => _ReaderPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage> {
+class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   late final ReaderState rs;
   PageController? _pageController; // 覆盖/平移模式
   TurnPageController? _turnCtrl; // 仿真模式
@@ -51,6 +51,29 @@ class _ReaderPageState extends State<ReaderPage> {
   double? _sliderPreview;
   String _sliderChapterLabel = '';
   int? _sliderChapter; // 在线书进度条拖动时的章号预览（1 基）
+
+  double? _bookmarkDragPx; // 下拉书签拖动累计像素（null=未在拖动）
+  static const double _bookmarkTriggerPx = 90;
+
+  // 覆盖揭页状态（pageMode == 2）：
+  // _coverOffset：当前页滑出量（-1..1）。负=向左滑出露出下一页；正=向右滑回盖住上一页。
+  // _coverIndex：当前窗口页索引；_coverAnimating：翻页补间进行中。
+  double _coverOffset = 0;
+  int _coverIndex = 0;
+  bool _coverAnimating = false;
+  double _coverFrom = 0;
+  double _coverTo = 0;
+  late final AnimationController _coverCtrl = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 240))
+    ..addListener(_onCoverTick)
+    ..addStatusListener(_onCoverStatus);
+
+  // 左侧目录/书签面板（占屏 1/3 宽，滑入滑出）
+  bool _sidePanelOpen = false;
+  late final AnimationController _panelCtrl = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 240));
+  ScrollController? _tocListController;
+  ScrollController? _bookmarkListController;
 
   @override
   void initState() {
@@ -79,6 +102,10 @@ class _ReaderPageState extends State<ReaderPage> {
     rs.dispose();
     _pageController?.dispose();
     _scrollController?.dispose();
+    _coverCtrl.dispose();
+    _panelCtrl.dispose();
+    _tocListController?.dispose();
+    _bookmarkListController?.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -108,6 +135,18 @@ class _ReaderPageState extends State<ReaderPage> {
   void _handleTapUp(TapUpDetails d, BoxConstraints box) {
     final w = box.maxWidth;
     final dx = d.localPosition.dx;
+    final mode = context.read<ReaderConfig>().settings.pageMode;
+    if (mode == 2) {
+      // 覆盖揭页：点击分区驱动翻页补间
+      if (dx < w * 0.3) {
+        _coverGoPrevious();
+      } else if (dx > w * 0.7) {
+        _coverGoNext();
+      } else {
+        _toggleMenu();
+      }
+      return;
+    }
     if (dx < w * 0.3) {
       _prev();
     } else if (dx > w * 0.7) {
@@ -123,6 +162,10 @@ class _ReaderPageState extends State<ReaderPage> {
     final mode = context.read<ReaderConfig>().settings.pageMode;
     if (mode == 3) {
       _scrollToNextPage(layout);
+      return;
+    }
+    if (mode == 2) {
+      _coverGoNext();
       return;
     }
     if (mode == 0) {
@@ -160,6 +203,10 @@ class _ReaderPageState extends State<ReaderPage> {
     final mode = context.read<ReaderConfig>().settings.pageMode;
     if (mode == 3) {
       _scrollToPrevPage(layout);
+      return;
+    }
+    if (mode == 2) {
+      _coverGoPrevious();
       return;
     }
     if (mode == 0) {
@@ -278,7 +325,12 @@ class _ReaderPageState extends State<ReaderPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final palette = _effectivePalette(cfg, isDark);
 
-    return Scaffold(
+    return PopScope(
+      canPop: !_sidePanelOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _sidePanelOpen) _closeSidePanel();
+      },
+      child: Scaffold(
       body: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         color: palette.background,
@@ -305,8 +357,9 @@ class _ReaderPageState extends State<ReaderPage> {
             ],
           ),
         ),
-      ),
-    );
+      ),        // AnimatedContainer
+      ),        // Scaffold
+    );          // PopScope 闭 + return 分号
   }
 
   ReaderPalette _effectivePalette(ReaderConfig cfg, bool isDark) {
@@ -464,6 +517,9 @@ class _ReaderPageState extends State<ReaderPage> {
           _pageController!.jumpToPage(target);
         }
         rs.currentPage = pageInChapter;
+        // 覆盖揭页：进度跳转后同步窗口页索引并复位滑出量
+        _coverIndex = target;
+        _coverOffset = 0;
       });
     }
 
@@ -471,6 +527,8 @@ class _ReaderPageState extends State<ReaderPage> {
     switch (cfg.settings.pageMode) {
       case 0:
         body = _turnBody(palette, cfg);
+      case 2:
+        body = _coverRevealBody(box, layout, palette, cfg);
       case 3:
         body = Padding(padding: _pagePad, child: _scrollBody(layout, palette, cfg));
       default:
@@ -480,10 +538,76 @@ class _ReaderPageState extends State<ReaderPage> {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (d) => _handleTapUp(d, box),
+      onHorizontalDragStart:
+          cfg.settings.pageMode == 2 ? (_) => _coverDragStart() : null,
+      onHorizontalDragUpdate: cfg.settings.pageMode == 2
+          ? (d) => _coverDragUpdate(d, box.maxWidth)
+          : null,
+      onHorizontalDragEnd:
+          cfg.settings.pageMode == 2 ? _coverDragEnd : null,
       child: Stack(
         children: [
           Positioned.fill(child: _background(cfg, isDark: false)),
           Positioned.fill(child: body),
+          // 下拉书签热区与指示（仅翻页模式、菜单与面板关闭时）
+          if (cfg.settings.pageMode != 3 && !_menuVisible && !_sidePanelOpen)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: MediaQuery.of(ctx).size.height * 0.18,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onVerticalDragUpdate: (d) {
+                  final delta = d.primaryDelta ?? 0;
+                  if (_bookmarkDragPx == null && delta <= 0) return;
+                  _bookmarkDragPx =
+                      ((_bookmarkDragPx ?? 0) + delta).clamp(0.0, _bookmarkTriggerPx * 1.4);
+                  setState(() {});
+                },
+                onVerticalDragEnd: (d) {
+                  final triggered = (_bookmarkDragPx ?? 0) >= _bookmarkTriggerPx;
+                  _bookmarkDragPx = null;
+                  setState(() {});
+                  if (triggered) _toggleBookmark();
+                },
+              ),
+            ),
+          // 左侧目录/书签面板：遮罩 + 滑入面板
+          if (_sidePanelOpen || _panelCtrl.value > 0) ...[
+            AnimatedBuilder(
+              animation: _panelCtrl,
+              builder: (ctx, _) => Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: !_sidePanelOpen,
+                  child: GestureDetector(
+                    onTap: _closeSidePanel,
+                    child: Container(
+                      color: Colors.black
+                          .withValues(alpha: 0.3 * _panelCtrl.value),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            AnimatedBuilder(
+              animation: _panelCtrl,
+              builder: (ctx, _) => Positioned(
+                top: 0,
+                bottom: 0,
+                left: 0,
+                width: MediaQuery.of(ctx).size.width / 3,
+                child: _sidePanel(),
+              ),
+            ),
+          ],
+          if (_bookmarkDragPx != null)
+            Positioned(
+              top: MediaQuery.of(ctx).padding.top + 10,
+              left: 0,
+              right: 0,
+              child: _bookmarkIndicator(),
+            ),
         ],
       ),
     );
@@ -604,7 +728,7 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 覆盖 / 平移模式：PageView + 窗口式页面。
   Widget _pageBody(ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
     final style = _style(cfg, palette);
-    final mode = cfg.settings.pageMode; // 1 平移 / 2 覆盖
+    final mode = cfg.settings.pageMode; // 1 平移
     _pageController ??= PageController();
     final pc = _pageController!;
     return PageView.builder(
@@ -613,8 +737,7 @@ class _ReaderPageState extends State<ReaderPage> {
       onPageChanged: _syncProgressAt,
       itemBuilder: (ctx, v) {
         final mapped = _mapWindowIndex(v);
-        // 页面必须不透明且全屏铺满：覆盖模式中新页要能真正“盖住”旧页
-        final content = Container(
+        return Container(
           decoration: _pageDecoration(cfg, palette),
           padding: _pagePad,
           alignment: Alignment.topLeft,
@@ -623,57 +746,175 @@ class _ReaderPageState extends State<ReaderPage> {
             style: style,
           ),
         );
-        if (mode == 1) return content;
-        return AnimatedBuilder(
-          animation: pc,
-          builder: (ctx, _) {
-            double value = v.toDouble();
-            if (pc.hasClients && pc.position.haveDimensions && pc.page != null) {
-              value = pc.page!;
-            }
-            final d = value - v; // >0 当前页(在锚点左侧)，<0 即将盖入的页
-            if (d.abs() < 0.001) return content;
-            return _coverPage(content, d);
-          },
-        );
       },
     );
   }
 
-  /// 覆盖模式：当前页钉住不动，新页不透明地从右侧滑入盖在上面，左缘带落影。
-  Widget _coverPage(Widget content, double d) {
-    if (d > 0) {
-      return LayoutBuilder(builder: (ctx, box) {
-        return Transform.translate(
-          offset: Offset(d * box.maxWidth, 0),
-          child: content,
-        );
-      });
-    }
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        content,
-        Positioned(
-          left: 0, top: 0, bottom: 0, width: 26,
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.black.withValues(alpha: 0.32),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
+  /// 覆盖揭页（pageMode == 2）：当前页作为上层跟手滑出，
+  /// 下层固定显示被露出的页面，滑出前缘带阴影。
+  /// _coverOffset ∈ [-1, 1]：负=向左滑出（露出下一页），正=向右滑回（盖住上一页）。
+  Widget _coverRevealBody(
+      BoxConstraints box, ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
+    final w = box.maxWidth;
+    final style = _style(cfg, palette);
+
+    Widget pageContent(int pageIdx) {
+      final mapped = _mapWindowIndex(pageIdx);
+      return DecoratedBox(
+        decoration: _pageDecoration(cfg, palette),
+        child: Padding(
+          padding: _pagePad,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: Text(
+              mapped.$1.pageText(mapped.$2),
+              style: style,
             ),
           ),
         ),
+      );
+    }
+
+    // 上层：当前页（跟手平移）
+    final over = Transform.translate(
+      offset: Offset(_coverOffset * w, 0),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          pageContent(_coverIndex),
+          // 滑出前缘阴影：向左滑出时阴影在右缘，向右时在左缘
+          if (_coverOffset.abs() > 0.01)
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: _coverOffset > 0 ? 0 : null,
+              right: _coverOffset < 0 ? 0 : null,
+              width: 26,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: _coverOffset > 0
+                          ? Alignment.centerLeft
+                          : Alignment.centerRight,
+                      end: _coverOffset > 0
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(
+                            alpha: 0.28 * _coverOffset.abs()),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    // 下层：被露出的页面（offset 负=右侧下一页；正=左侧上一页）
+    final underIdx = _coverOffset < -0.001
+        ? _coverIndex + 1
+        : _coverOffset > 0.001
+            ? _coverIndex - 1
+            : -1;
+    final underValid = underIdx >= 0 && underIdx < _windowTotal;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (underValid) Positioned.fill(child: pageContent(underIdx)),
+        Positioned.fill(child: over),
       ],
     );
   }
 
-  // ---------- 滚动模式 ----------
+  // ---------- 覆盖揭页状态机 ----------
+
+  void _coverDragStart() {
+    if (_coverAnimating) return;
+    _coverCtrl.stop();
+  }
+
+  void _coverDragUpdate(DragUpdateDetails d, double width) {
+    if (_coverAnimating) return;
+    setState(() {
+      _coverOffset =
+          (_coverOffset + (d.primaryDelta ?? 0) / width).clamp(-1.0, 1.0);
+    });
+  }
+
+  void _coverDragEnd(DragEndDetails d) {
+    if (_coverAnimating) return;
+    final v = d.velocity.pixelsPerSecond.dx;
+    if (_coverOffset < -0.5 || v < -600) {
+      _coverSettle(-1.0);
+    } else if (_coverOffset > 0.5 || v > 600) {
+      _coverSettle(1.0);
+    } else {
+      _coverSettle(0.0);
+    }
+  }
+
+  void _coverGoNext() {
+    if (_coverAnimating) return;
+    if (_coverIndex >= _windowTotal - 1) {
+      if (rs.currentChapter < rs.chapters.length - 1) {
+        _goChapter(rs.currentChapter + 1);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('已经是最后一页了'), duration: Duration(milliseconds: 600)));
+      }
+      return;
+    }
+    _coverSettle(-1.0);
+  }
+
+  void _coverGoPrevious() {
+    if (_coverAnimating) return;
+    if (_coverIndex <= 0) {
+      if (rs.currentChapter > 0) {
+        _pendingJumpEnd = true;
+        _goChapter(rs.currentChapter - 1);
+      }
+      return;
+    }
+    _coverSettle(1.0);
+  }
+
+  /// 补间到目标滑出量；落到 ±1 时完成翻页并同步进度。
+  void _coverSettle(double to) {
+    if (_coverAnimating) return;
+    if (to < 0 && _coverIndex >= _windowTotal - 1) return; // 无下一页可揭
+    if (to > 0 && _coverIndex <= 0) return; // 无上一页可回盖
+    _coverFrom = _coverOffset;
+    _coverTo = to;
+    _coverAnimating = true;
+    _coverCtrl.forward(from: 0);
+  }
+
+  void _onCoverTick() {
+    setState(() {
+      _coverOffset = _coverFrom + (_coverTo - _coverFrom) * _coverCtrl.value;
+    });
+  }
+
+  void _onCoverStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _coverAnimating = false;
+    if (_coverTo.abs() >= 1) {
+      final target = _coverTo < 0 ? _coverIndex + 1 : _coverIndex - 1;
+      _coverIndex = target.clamp(0, _windowTotal - 1);
+      _coverOffset = 0;
+      _syncProgressAt(_coverIndex);
+      setState(() {});
+      return;
+    }
+    _coverOffset = 0;
+    setState(() {});
+  }
 
   Widget _scrollBody(
       ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
@@ -694,18 +935,91 @@ class _ReaderPageState extends State<ReaderPage> {
         }
       });
     }
-    // 按已分好的页懒加载：整章塞进一个 Text 会在长章节时卡顿；
-    // itemExtent 固定为页高，滚动进度换算与翻页模式完全一致，
-    // 页内文本来自 pageText，段落缩进也与翻页模式一致。
-    return ListView.builder(
-      controller: sc,
-      itemCount: layout.pageCount,
-      itemExtent: layout.lineHeight * layout.linesPerPage,
-      itemBuilder: (ctx, page) => Align(
-        alignment: Alignment.topLeft,
-        child: Text(layout.pageText(page), style: style),
+    // 跨章续读：接近章末时预取下一章（在线书），滚过引导区自动切章
+    final nextIdx = rs.currentChapter + 1;
+    final hasNext = nextIdx < rs.chapters.length;
+    if (hasNext && rs.chapters[nextIdx].text.isEmpty) {
+      rs.preloadChapter(nextIdx);
+    }
+    final nextTitle = hasNext ? rs.chapters[nextIdx].title : null;
+    final pageHeight = layout.lineHeight * layout.linesPerPage;
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n is ScrollUpdateNotification &&
+            hasNext &&
+            !_scrollChapterPending &&
+            n.metrics.pixels >= n.metrics.maxScrollExtent - 2 &&
+            n.metrics.maxScrollExtent > 100) {
+          _scrollToNextChapter();
+        }
+        return false;
+      },
+      child: ListView.builder(
+        controller: sc,
+        itemCount: layout.pageCount + (hasNext ? 2 : 0),
+        itemExtent: pageHeight,
+        itemBuilder: (ctx, i) {
+          if (i < layout.pageCount) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: Text(layout.pageText(i), style: style),
+            );
+          }
+          // 章末引导：继续滚动即进入下一章
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: pageHeight * 0.3),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('下一章：' + (nextTitle ?? ''),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).hintColor)),
+                  const SizedBox(height: 4),
+                  const Text('继续滚动阅读',
+                      style: TextStyle(fontSize: 11, color: Colors.grey)),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
+  }
+
+  bool _scrollChapterPending = false;
+
+  /// 滚过章末引导区：切换到下一章并回到顶部，形成跨章续读。
+  void _scrollToNextChapter() {
+    if (_scrollChapterPending) return;
+    final next = rs.currentChapter + 1;
+    if (next >= rs.chapters.length) return;
+    _scrollChapterPending = true;
+    rs.goToChapter(next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollController?.jumpTo(0);
+      _scrollChapterPending = false;
+    });
+  }
+
+  bool _scrollChapterPending = false;
+
+  /// 滚动越过当前章末：切换到下一章并回到顶部，形成跨章续读。
+  void _scrollToNextChapter() {
+    if (_scrollChapterPending) return;
+    final next = rs.currentChapter + 1;
+    if (next >= rs.chapters.length) return;
+    _scrollChapterPending = true;
+    rs.goToChapter(next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollController?.jumpTo(0);
+      _scrollChapterPending = false;
+    });
   }
 
   // ---------- 菜单 ----------
@@ -891,14 +1205,10 @@ class _ReaderPageState extends State<ReaderPage> {
                       _barButton(
                         icon: Icons.menu_book_outlined,
                         label: '目录',
-                        onTap: _showToc,
-                      ),
-                      _barButton(
-                        icon: Icons.bookmarks_outlined,
-                        label: rs.bookmarks.isEmpty
-                            ? '书签'
-                            : '书签 ${rs.bookmarks.length}',
-                        onTap: rs.bookmarks.isEmpty ? null : _showBookmarks,
+                        onTap: () {
+                          if (_menuVisible) _toggleMenu();
+                          _openSidePanel();
+                        },
                       ),
                       _barButton(
                         icon: Icons.skip_next,
@@ -909,7 +1219,7 @@ class _ReaderPageState extends State<ReaderPage> {
                       ),
                     ],
                   ),
-                  // 第二行：书签增删 + 设置
+                  // 第二行：书签增删 + 全文搜索 + 设置
                   Row(
                     children: [
                       _barButton(
@@ -918,6 +1228,11 @@ class _ReaderPageState extends State<ReaderPage> {
                             : Icons.bookmark_border,
                         label: _hasBookmarkHere() ? '删书签' : '加书签',
                         onTap: _toggleBookmark,
+                      ),
+                      _barButton(
+                        icon: Icons.search,
+                        label: '搜索',
+                        onTap: _showSearchSheet,
                       ),
                       _barButton(
                         icon: Icons.settings_outlined,
@@ -965,7 +1280,68 @@ class _ReaderPageState extends State<ReaderPage> {
 
   bool _menuDragging = false;
 
-  bool _hasBookmarkHere() {
+  /// 下拉书签指示器（顶部悬浮胶囊）：跟随拖动进度给视觉反馈。
+  Widget _bookmarkIndicator() {
+    final drag = (_bookmarkDragPx ?? 0).clamp(0.0, _bookmarkTriggerPx);
+    final triggered = drag >= _bookmarkTriggerPx;
+    final hasHere = _hasBookmarkHere();
+    final label = triggered
+        ? (hasHere ? '松手移除书签' : '松手添加书签')
+        : (hasHere ? '继续下拉移除书签' : '继续下拉添加书签');
+    final color = triggered ? Colors.green.shade700 : Theme.of(context).hintColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 8,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            triggered ? Icons.bookmark : Icons.bookmark_border,
+            size: 20,
+            color: color,
+          ),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(fontSize: 13, color: color)),
+        ],
+      ),
+    );
+  }
+
+  /// 搜索预览的关键词高亮（大小写敏感，与 indexOf 搜索语义一致）。
+  List<TextSpan> _highlightPreview(String text, String query) {
+    if (query.isEmpty) return [TextSpan(text: text)];
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final idx = text.indexOf(query, start);
+      if (idx < 0) {
+        spans.add(TextSpan(text: text.substring(start)));
+        break;
+      }
+      if (idx > start) {
+        spans.add(TextSpan(text: text.substring(start, idx)));
+      }
+      spans.add(TextSpan(
+          text: text.substring(idx, idx + query.length),
+          style: TextStyle(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.bold)));
+      start = idx + query.length;
+    }
+    if (start < text.length) spans.add(TextSpan(text: text.substring(start)));
+    return spans;
+  }
+
+    bool _hasBookmarkHere() {
     final layout = _layout;
     if (layout == null) return false;
     final offset = layout.charOffsetOfLine(
@@ -982,134 +1358,6 @@ class _ReaderPageState extends State<ReaderPage> {
     _goChapter(ch, charOffset: inChapter);
   }
 
-  void _showToc() {
-    _toggleMenu();
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (ctx, controller) {
-          // 目录定位到当前章（几千章的书不必从头翻）
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (controller.hasClients && rs.currentChapter > 0) {
-              controller.jumpTo(
-                  (rs.currentChapter * 48.0)
-                      .clamp(0.0, controller.position.maxScrollExtent));
-            }
-          });
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text('目录 · 共${rs.chapters.length}章',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  controller: controller,
-                  itemCount: rs.chapters.length,
-                  itemExtent: 48,
-                  itemBuilder: (ctx, i) {
-                  final current = i == rs.currentChapter;
-                  return ListTile(
-                    dense: true,
-                    selected: current,
-                    title: Text(
-                      rs.chapters[i].title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: current
-                          ? TextStyle(
-                              color: Theme.of(ctx).colorScheme.primary,
-                              fontWeight: FontWeight.bold)
-                          : null,
-                    ),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _goChapter(i);
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        );
-        },
-      ),
-    );
-  }
-
-  /// 书签列表：显示各书签所在章节与原文预览，点击跳转，可删除。
-  void _showBookmarks() {
-    _toggleMenu();
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.55,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (ctx, controller) => Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text('书签 · 共${rs.bookmarks.length}条',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-            ),
-            Expanded(
-              child: rs.bookmarks.isEmpty
-                  ? const Center(
-                      child: Text('还没有书签，阅读时点「加书签」即可保存位置',
-                          style: TextStyle(color: Colors.grey)))
-                  : ListView.builder(
-                      controller: controller,
-                      itemCount: rs.bookmarks.length,
-                      itemBuilder: (ctx, i) {
-                        final bm = rs.bookmarks[i];
-                        return ListTile(
-                          leading: const Icon(Icons.bookmark,
-                              color: Colors.deepOrange),
-                          title: Text(
-                            bm.chapterTitle.isEmpty
-                                ? '第${bm.chapterIndex + 1}章'
-                                : bm.chapterTitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w600),
-                          ),
-                          subtitle: Text(
-                            bm.preview,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          trailing: Text(formatTimeCN(bm.createdAt),
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: Theme.of(ctx).hintColor)),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _goChapter(bm.chapterIndex,
-                                charOffset: bm.charOffset);
-                          },
-                          onLongPress: () async {
-                            await rs.removeBookmark(bm.id!);
-                          },
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Future<void> _toggleBookmark() async {
     final layout = _layout;
@@ -1144,6 +1392,260 @@ class _ReaderPageState extends State<ReaderPage> {
             content: Text('已添加书签'), duration: Duration(milliseconds: 600)));
       }
     }
+  }
+
+  // ---------- 左侧目录/书签面板 ----------
+
+  void _openSidePanel() {
+    _sidePanelOpen = true;
+    _panelCtrl.forward();
+    setState(() {});
+  }
+
+  void _closeSidePanel() {
+    _sidePanelOpen = false;
+    _panelCtrl.reverse();
+    setState(() {});
+  }
+
+  /// 左侧 1/3 宽面板：顶部"目录/书签"切换，默认章节列表。
+  Widget _sidePanel() {
+    final width = MediaQuery.of(context).size.width / 3;
+    final tocCtrl = _tocListController ??= ScrollController();
+    final bmCtrl = _bookmarkListController ??= ScrollController();
+    // 书签按章节分组（章号升序，组内按位置升序）
+    final groups = <int, List<Bookmark>>{};
+    for (final bm in rs.bookmarks) {
+      groups.putIfAbsent(bm.chapterIndex, () => []).add(bm);
+    }
+    final sortedKeys = groups.keys.toList()..sort();
+
+    return SlideTransition(
+      position: _panelCtrl.drive(
+        CurveTween(curve: Curves.easeOutCubic)
+            .chain(Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)),
+      ),
+      child: Material(
+        elevation: 8,
+        color: Theme.of(context).scaffoldBackgroundColor,
+        child: DefaultTabController(
+          length: 2,
+          child: Column(
+            children: [
+              TabBar(
+                tabs: const [Tab(text: '目录'), Tab(text: '书签')],
+                onTap: (_) => setState(() {}),
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    // 目录视图
+                    Builder(
+                      builder: (ctx) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (tocCtrl.hasClients && rs.currentChapter > 0) {
+                            tocCtrl.jumpTo((rs.currentChapter * 48.0)
+                                .clamp(0.0, tocCtrl.position.maxScrollExtent));
+                          }
+                        });
+                        return ListView.builder(
+                          controller: tocCtrl,
+                          itemCount: rs.chapters.length,
+                          itemExtent: 48,
+                          itemBuilder: (ctx, i) {
+                            final current = i == rs.currentChapter;
+                            return ListTile(
+                              dense: true,
+                              selected: current,
+                              title: Text(
+                                rs.chapters[i].title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: current
+                                    ? TextStyle(
+                                        color: Theme.of(ctx).colorScheme.primary,
+                                        fontWeight: FontWeight.bold)
+                                    : null,
+                              ),
+                              onTap: () {
+                                _closeSidePanel();
+                                _goChapter(i);
+                              },
+                            );
+                          },
+                        );
+                      },
+                    ),
+                    // 书签视图：按章节分组
+                    ListenableBuilder(
+                      listenable: rs,
+                      builder: (ctx, _) {
+                        if (rs.bookmarks.isEmpty) {
+                          return Center(
+                            child: Text(
+                              '还没有书签，下拉或点菜单「加书签」保存位置',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Theme.of(ctx).hintColor),
+                            ),
+                          );
+                        }
+                        return ListView(
+                          controller: bmCtrl,
+                          children: [
+                            for (final key in sortedKeys) ...[
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(14, 12, 14, 4),
+                                child: Text(
+                                  '第${key + 1}章 ${key < rs.chapters.length ? rs.chapters[key].title : ''}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13),
+                                ),
+                              ),
+                              for (final bm in groups[key]!)
+                                ListTile(
+                                  dense: true,
+                                  leading: Text(
+                                    '${formatTimeCN(bm.createdAt)}',
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        color: Theme.of(ctx).hintColor),
+                                  ),
+                                  title: Text(
+                                    bm.preview,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                  onTap: () {
+                                    _closeSidePanel();
+                                    _goChapter(bm.chapterIndex,
+                                        charOffset: bm.charOffset);
+                                  },
+                                  trailing: IconButton(
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 20),
+                                    onPressed: () {
+                                      if (bm.id != null) {
+                                        rs.removeBookmark(bm.id!);
+                                      }
+                                    },
+                                  ),
+                                ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 全文搜索弹层：输入关键词 → 全书搜索 → 点击命中跳转。
+  /// 全文搜索弹层：输入关键词 → 全书搜索 → 点击命中跳转。
+  void _showSearchSheet() {
+    _toggleMenu();
+    final controller = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.72,
+          child: ListenableBuilder(
+            listenable: rs,
+            builder: (ctx, _) => Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: controller,
+                          autofocus: true,
+                          onSubmitted: rs.searchBook,
+                          decoration: const InputDecoration(
+                            hintText: '搜索全书内容',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: rs.searching
+                            ? null
+                            : () => rs.searchBook(controller.text),
+                        child: const Text('搜索'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (rs.searching) const LinearProgressIndicator(),
+                if (rs.searchError != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(rs.searchError!,
+                        style: const TextStyle(color: Colors.red)),
+                  ),
+                Expanded(
+                  child: rs.searchResults.isEmpty
+                      ? Center(
+                          child: Text(
+                            rs.searching ? '正在搜索…' : '输入关键词后搜索',
+                            style: TextStyle(color: Theme.of(ctx).hintColor),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: rs.searchResults.length,
+                          itemBuilder: (ctx, i) {
+                            final hit = rs.searchResults[i];
+                            final chapterTitle = hit.chapter < rs.chapters.length
+                                ? rs.chapters[hit.chapter].title
+                                : '';
+                            return ListTile(
+                              dense: true,
+                              leading: Text('第${hit.chapter + 1}章',
+                                  style: const TextStyle(fontSize: 12)),
+                              title: Text.rich(
+                                TextSpan(
+                                  children:
+                                      _highlightPreview(hit.preview, rs.lastQuery),
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(chapterTitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11)),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _goChapter(hit.chapter,
+                                    charOffset: hit.offset);
+                              },
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _showSettings() {

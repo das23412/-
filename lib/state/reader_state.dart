@@ -377,6 +377,35 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     return currentPage;
   }
 
+  // ---------- 全文搜索 ----------
+
+  List<({int chapter, int offset, String preview})> searchResults = [];
+  String lastQuery = '';
+  bool searching = false;
+  String? searchError;
+
+  /// 全书关键词搜索（隔离线程执行，逐章定位所有命中）。
+  Future<void> searchBook(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    lastQuery = q;
+    searching = true;
+    searchError = null;
+    searchResults = [];
+    _safeNotify();
+    try {
+      final hits = await compute(_searchBookJob, {
+        'texts': chapters.map((c) => c.text).toList(),
+        'query': q,
+      });
+      searchResults = hits;
+    } catch (e) {
+      searchError = '搜索失败：$e';
+    }
+    searching = false;
+    _safeNotify();
+  }
+
   // ---------- 书签 ----------
 
   Future<void> addBookmark(String preview) async {
@@ -432,4 +461,25 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     saveNow();
     super.dispose();
   }
+}
+
+/// 全书关键词搜索（隔离线程执行）：逐章定位所有命中并生成上下文预览。
+List<({int chapter, int offset, String preview})> _searchBookJob(
+    Map<String, Object?> job) {
+  final texts = job['texts'] as List<String>;
+  final query = job['query'] as String;
+  final hits = <({int chapter, int offset, String preview})>[];
+  for (int i = 0; i < texts.length && hits.length < 500; i++) {
+    final text = texts[i];
+    var pos = text.indexOf(query);
+    var inChapter = 0;
+    while (pos >= 0 && inChapter < 50 && hits.length < 500) {
+      final start = (pos - 20).clamp(0, text.length);
+      final end = (pos + query.length + 20).clamp(0, text.length);
+      hits.add((chapter: i, offset: pos, preview: text.substring(start, end)));
+      pos = text.indexOf(query, pos + query.length);
+      inChapter++;
+    }
+  }
+  return hits;
 }

@@ -254,13 +254,15 @@ class TurnPageController extends ChangeNotifier {
     required BoxConstraints constraints,
   }) {
     final width = constraints.maxWidth;
+    // 翻页灵敏度：拖动 1/3 屏宽即完成一次翻页（原为整屏宽，手感太迟钝）
+    const dragSensitivity = 3.0;
     late final double delta;
     switch (direction) {
       case TurnDirection.rightToLeft:
-        delta = -(details.primaryDelta ?? 0) / width;
+        delta = -(details.primaryDelta ?? 0) * dragSensitivity / width;
         break;
       case TurnDirection.leftToRight:
-        delta = (details.primaryDelta ?? 0) / width;
+        delta = (details.primaryDelta ?? 0) * dragSensitivity / width;
         break;
     }
 

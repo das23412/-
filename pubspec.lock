@@ -85,7 +85,7 @@ packages:
     dependency: transitive
     description:
       name: csslib
-      sha256: "09bad715f418841f976c77db72d5398dc1253c21fb9c0c7f0b0b985860b2d58e"
+      sha256: 09bad715f418841f976c77db72d5398dc1253c21fb9c0c7f0b0b985860b2d58e
       url: "https://pub.dev"
     source: hosted
     version: "1.0.2"
@@ -193,7 +193,7 @@ packages:
     dependency: "direct main"
     description:
       name: html
-      sha256: "43b67b8f43321ab066817dfac5619596c98bb1b61624e77203bb4351785f9699"
+      sha256: 43b67b8f43321ab066817dfac5619596c98bb1b61624e77203bb4351785f9699
       url: "https://pub.dev"
     source: hosted
     version: "0.15.7"
@@ -542,10 +542,10 @@ packages:
     dependency: "direct main"
     description:
       name: sqflite
-      sha256: "54ad23e2a79c846b596b6c56cdd9c867ea58c288258402316b602f78df0cbfe0"
+      sha256: "58a799e6ac17dd32fbab93813d39ed835a75ccc0f8f85b8955fe318c6712b082"
       url: "https://pub.dev"
     source: hosted
-    version: "2.4.4"
+    version: "2.4.3"
   sqflite_android:
     dependency: transitive
     description:
