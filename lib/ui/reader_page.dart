@@ -728,7 +728,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   /// 覆盖 / 平移模式：PageView + 窗口式页面。
   Widget _pageBody(ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
     final style = _style(cfg, palette);
-    final mode = cfg.settings.pageMode; // 1 平移
     _pageController ??= PageController();
     final pc = _pageController!;
     return PageView.builder(
@@ -968,7 +967,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
           }
           // 章末引导：继续滚动即进入下一章
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: pageHeight * 0.3),
+            padding: EdgeInsets.symmetric(vertical: pageHeight * 0.3),
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -995,21 +994,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   bool _scrollChapterPending = false;
 
   /// 滚过章末引导区：切换到下一章并回到顶部，形成跨章续读。
-  void _scrollToNextChapter() {
-    if (_scrollChapterPending) return;
-    final next = rs.currentChapter + 1;
-    if (next >= rs.chapters.length) return;
-    _scrollChapterPending = true;
-    rs.goToChapter(next);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _scrollController?.jumpTo(0);
-      _scrollChapterPending = false;
-    });
-  }
-
-  bool _scrollChapterPending = false;
-
-  /// 滚动越过当前章末：切换到下一章并回到顶部，形成跨章续读。
   void _scrollToNextChapter() {
     if (_scrollChapterPending) return;
     final next = rs.currentChapter + 1;
@@ -1410,7 +1394,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
 
   /// 左侧 1/3 宽面板：顶部"目录/书签"切换，默认章节列表。
   Widget _sidePanel() {
-    final width = MediaQuery.of(context).size.width / 3;
     final tocCtrl = _tocListController ??= ScrollController();
     final bmCtrl = _bookmarkListController ??= ScrollController();
     // 书签按章节分组（章号升序，组内按位置升序）
@@ -1422,8 +1405,8 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
 
     return SlideTransition(
       position: _panelCtrl.drive(
-        CurveTween(curve: Curves.easeOutCubic)
-            .chain(Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)),
+        Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)
+            .chain(CurveTween(curve: Curves.easeOutCubic)),
       ),
       child: Material(
         elevation: 8,
