@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:flutter/painting.dart';
 
 import '../core/book_format.dart';
 // book.dart 里也定义了枚举 BookSource（书籍来源），与书源类重名，隐藏之
@@ -69,11 +68,23 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _disposed = false;
 
+  /// 在途 load 单飞：并发调用（如连续切换编码）复用同一 Future，
+  /// 防止两次解析交错覆盖 chapters/currentChapter 等共享状态。
+  Future<void>? _loadFuture;
+
   /// 上一次通知是否仅为页码变化（UI 据此跳过菜单关闭时的整页重建）。
   bool lastChangePageOnly = false;
 
-  /// 打开书：解析文件 → 恢复进度 → 载入书签。
-  Future<void> load() async {
+  /// 打开书：解析文件 → 恢复进度 → 载入书签。单飞：在途时复用同一 Future。
+  Future<void> load() {
+    final f = _loadFuture;
+    if (f != null) return f;
+    final task = _doLoad();
+    _loadFuture = task;
+    return task.whenComplete(() => _loadFuture = null);
+  }
+
+  Future<void> _doLoad() async {
     loading = true;
     error = null;
     _safeNotify();
@@ -91,10 +102,14 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 手动切换本地 TXT 书的解析编码并重解析；进度由既有恢复链路保留
-  /// （load 后 currentChapter 对齐 book.chapterIndex，页内偏移由
-  /// reader_page 的 restorePage 按 book.charOffset 恢复）。
+  /// （切换前设 _pendingCharOffset，load 后 restorePage 按 book.charOffset
+  /// 恢复页内位置；load 单飞保证连续切换串行化）。
   Future<void> switchEncoding(String enc) async {
     if (book.isOnline || book.format != BookFormat.txt) return;
+    if (book.encoding == enc) return;
+    // 在途重解析先等它落地，避免两次 load 并发交错覆盖共享状态
+    final pending = _loadFuture;
+    if (pending != null) await pending;
     if (book.encoding == enc) return;
     book.encoding = enc;
     if (book.id != null) await _db.updateBook(book);
@@ -217,6 +232,12 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 单章实际加载：缓存 → 网络；无论成败都在 finally 清理在途标记。
   Future<void> _loadChapter(int idx, {required bool foreground}) async {
+    // 前台旗标必须在进入处就加入：缓存命中/内存命中分支会提前 return，
+    // 若在缓存检查后才加旗标，命中路径全程零 notify，跳章后 UI 停在
+    // 空白页且无加载指示（文本落定后无人再触发重建）。
+    if (foreground && _inflightForeground.add(idx)) {
+      _safeNotify();
+    }
     try {
       final cur = chapters[idx].text;
       if (cur.isNotEmpty && !cur.startsWith(_failedPrefix)) return;
@@ -230,9 +251,6 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
       if (source == null) {
         _applyChapterText(idx, '$_failedPrefix 书源不存在或已删除');
         return;
-      }
-      if (foreground && _inflightForeground.add(idx)) {
-        _safeNotify(); // 当前章开始联网加载：UI 显示进度
       }
       try {
         // 正文抓取+解析+净化全部在隔离线程执行：书源畸形正则不再冻结 UI

@@ -213,6 +213,20 @@ void main() {
       expect(joined.contains('主角出场了'), isTrue);
     });
 
+    test('PalmDOC 压缩 + extraFlags：先裁再解压（顺序修复回归）', () {
+      // 全 ASCII 记录逐字节即合法 PalmDOC 字面量（0x20-0x7E 直通）；
+      // 尾部 [0xAA, 0x82] 是 extra entry（flags bit1）。旧实现先解压再裁：
+      // 0xAA 会被 LZ77 当 token 消费注入杂字符，且在解压文本上反推裁剪量
+      // 误删真实正文；修复后先裁再解压。
+      final rec = [...utf8('Chapter 1\nThe hero appears.'), 0xAA, 0x82];
+      file.writeAsBytesSync(buildMobi([rec], compression: 2, extraFlags: 2));
+      final book = MobiParser.parse(file);
+      final text = book.chapters.map((c) => c.text).join('\n');
+      expect(text, contains('Chapter 1'));
+      expect(text, contains('The hero appears'));
+      expect(text.contains('\uFFFD'), isFalse);
+    });
+
     test('HUFF/CDIC 压缩抛出友好错误', () {
       file.writeAsBytesSync(buildMobi([utf8('x' * 20)], compression: 17480));
       expect(() => MobiParser.parse(file),

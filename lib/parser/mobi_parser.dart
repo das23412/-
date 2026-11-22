@@ -82,6 +82,10 @@ class MobiParser {
     final allBytes = BytesBuilder(copy: false);
     for (int i = 1; i <= textRecordCount && i < numRecords; i++) {
       List<int> rec = bytes.sublist(recordOffsets[i], recordOffsets[i + 1]);
+      // extra data 追加在压缩数据之后：必须先裁再解压。旧顺序（先解压再裁）
+      // 会把尾部 extra 字节喂给 LZ77 当 token 注入杂字符，且反向变长整数
+      // 在解压文本上反推裁剪量得到伪值，每个记录边界误删真实字符
+      rec = _trimTrailing(rec, extraFlags);
       switch (compression) {
         case 1: // 无压缩
           break;
@@ -93,7 +97,6 @@ class MobiParser {
         default:
           throw const FormatException('未知的 MOBI 压缩方式');
       }
-      rec = _trimTrailing(rec, extraFlags);
       allBytes.add(rec);
     }
     final rawBytes = allBytes.takeBytes();

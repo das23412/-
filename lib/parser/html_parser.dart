@@ -10,13 +10,24 @@ class HtmlParser {
   static ParsedBook parse(File file) {
     final bytes = file.readAsBytesSync();
     var html = CharsetDecoder.decode(bytes);
-    // 解码结果存在任一替换符，且文件头能探测到声明的 charset（如
-    // gbk/gb2312）时，按声明编码重解：旧条件要求连续两个 FFFD，
-    // UTF-8 严格解码下单个中文双字节损坏只产生一个替换符，声明了
-    // GBK 的文件会因不够"连续两个"而错过重解机会
-    if (html.contains('\uFFFD')) {
+    // 替换符 ≥2 且声明编码重解后替换符严格减少才采纳重解结果：
+    // 单个坏字节的真 UTF-8 页若恰好误标 gbk，无条件重解会把好文本
+    // 整篇搞坏（GBK 解码几乎不产生替换符，无法从结果分辨对错）。
+    // 旧条件「连续两个 FFFD」过严：单个中文双字节损坏只产生一个替换符
+    // 会错过重解；放宽为计数阈值并加结果校验，两头都堵住。
+    var fffdCount = 0;
+    for (final r in html.runes) {
+      if (r == 0xFFFD) fffdCount++;
+    }
+    if (fffdCount >= 2) {
       final retry = _decodeWithDeclaredCharset(bytes);
-      if (retry != null) html = retry;
+      var retryFffd = 0;
+      if (retry != null) {
+        for (final r in retry.runes) {
+          if (r == 0xFFFD) retryFffd++;
+        }
+        if (retryFffd < fffdCount) html = retry;
+      }
     }
     final text = TextUtils.stripHtml(html);
     if (text.trim().isEmpty) throw const FormatException('HTML 没有可读的正文');

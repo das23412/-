@@ -287,7 +287,10 @@ class SourceService {
   /// 隔离线程执行详情获取：书源正则可能灾难性回溯，不能跑 UI 线程。
   /// 结果与 [bookInfo] 完全一致（返回对象全为基础类型字段，可跨 isolate 传回）。
   static Future<OnlineBookInfo> bookInfoIsolated(BookSource s, SourceBook hint) =>
-      compute(_bookInfoJob, {'raw': s.rawJson, 'hint': hint.toJobMap()});
+      compute(_bookInfoJob, {'raw': s.rawJson, 'hint': hint.toJobMap()}).timeout(
+        const Duration(minutes: 1),
+        onTimeout: () => throw const SourceException('书源详情获取超时'),
+      );
 
   /// [bookInfo] 的「网络+解析」主体，供隔离线程（[_bookInfoJob]）复用。
   static Future<OnlineBookInfo> bookInfoCore(BookSource s, SourceBook hint) async {

@@ -283,6 +283,11 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
         }
       } else if (context.read<ReaderConfig>().settings.pageMode == 0) {
         _turnCtrl?.jumpToPage(windowIndex.clamp(0, _windowTotal - 1));
+      } else if (context.read<ReaderConfig>().settings.pageMode == 2) {
+        // 覆盖模式：同章跳转此前无分支导致视觉无反应、进度被下次翻页覆盖
+        _coverIndex = windowIndex.clamp(0, math.max(0, _windowTotal - 1));
+        _coverOffset = 0;
+        setState(() {});
       } else if (_pageController?.hasClients ?? false) {
         _pageController!.jumpToPage(windowIndex.clamp(0, _windowTotal - 1));
       }
@@ -679,14 +684,22 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   (ChapterLayout, int, int) _mapWindowIndex(int v) {
     final curCount = _layout?.pageCount ?? 0;
     if (v < _winPrevCount && _prevLayout != null) {
-      return (_prevLayout!, v, rs.currentChapter - 1);
+      return (_prevLayout!, v.clamp(0, math.max(0, _prevLayout!.pageCount - 1)),
+          rs.currentChapter - 1);
     }
     if (v < _winPrevCount + curCount || _nextLayout == null) {
-      return (_layout!, v - _winPrevCount, rs.currentChapter);
+      // 页号钳制：跨章/跳章重建的同一帧里窗口计数可能仍是旧坐标系，
+      // 越界页号会让 pageText 的 pageBreaks[page] 抛 RangeError
+      return (
+        _layout!,
+        (v - _winPrevCount).clamp(0, math.max(0, curCount - 1)),
+        rs.currentChapter
+      );
     }
     return (
       _nextLayout!,
-      v - _winPrevCount - curCount,
+      (v - _winPrevCount - curCount)
+          .clamp(0, math.max(0, _nextLayout!.pageCount - 1)),
       rs.currentChapter + 1
     );
   }
@@ -797,6 +810,13 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     // 预置三个页面内容（上层当前页 + 下层拖动/补间可能露出的两页候选）：
     // pageText 切片与装饰只在整页重建时计算，动画/拖动帧只重跑下方
     // builder，把偏移应用到 Transform 与阴影，页面文本以既有实例复用。
+    // 跨章/跳章重建的同一帧里 _coverIndex 仍是旧窗口坐标系的值（恢复
+    // postFrame 在本帧之后才跑），先钳制再取页，防 pageText 越界崩溃
+    if (_coverIndex >= _windowTotal) {
+      _coverIndex = math.max(0, _windowTotal - 1);
+    } else if (_coverIndex < 0) {
+      _coverIndex = 0;
+    }
     final overPage = pageContent(_coverIndex);
     final Widget? underPrev =
         _coverIndex - 1 >= 0 ? pageContent(_coverIndex - 1) : null;
@@ -1008,7 +1028,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('下一章：' + (nextTitle ?? ''),
+                  Text('下一章：${nextTitle ?? ''}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1539,7 +1559,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                                 ListTile(
                                   dense: true,
                                   leading: Text(
-                                    '${formatTimeCN(bm.createdAt)}',
+                                    formatTimeCN(bm.createdAt),
                                     style: TextStyle(
                                         fontSize: 10,
                                         color: Theme.of(ctx).hintColor),
@@ -1702,27 +1722,32 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
       builder: (ctx) => SimpleDialog(
         title: const Text('正文编码（本地 TXT）'),
         children: [
-          for (final e in const {
-            '': '自动识别',
-            'utf-8': 'UTF-8',
-            'gbk': 'GBK / GB18030',
-            'utf-16': 'UTF-16',
-          }.entries)
-            RadioListTile<String>(
-              value: e.key,
-              groupValue: current,
-              title: Text(e.value),
-              onChanged: (v) => Navigator.pop(ctx, v),
+          RadioGroup<String>(
+            groupValue: current,
+            onChanged: (v) => Navigator.pop(ctx, v!),
+            child: Column(
+              children: [
+                for (final e in const {
+                  '': '自动识别',
+                  'utf-8': 'UTF-8',
+                  'gbk': 'GBK / GB18030',
+                  'utf-16': 'UTF-16',
+                }.entries)
+                  RadioListTile<String>(
+                    value: e.key,
+                    title: Text(e.value),
+                  ),
+              ],
             ),
+          ),
         ],
       ),
     );
     if (choice == null || choice == rs.book.encoding) return;
-    final label = _encodingLabel(choice);
+    // 重解析后让恢复块按 book.charOffset 恢复页内位置（否则恢复块因
+    // currentChapter 未变而整体跳过，「进度已保留」不成立）
+    _pendingCharOffset = rs.book.charOffset;
     await rs.switchEncoding(choice);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已按 $label 重新解析，进度已保留')));
   }
 
   void _showSettings() {
@@ -1779,15 +1804,20 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                     ),
                   ],
                 ),
-                // 编码（仅本地 TXT 显示；EPUB/MOBI/HTML 自带编码声明）
+                // 编码（仅本地 TXT 显示；EPUB/MOBI/HTML 自带编码声明）。
+                // ListenableBuilder：switchEncoding 重解析完成时刷新 subtitle
+                //（sheet 由 cfg 的 AnimatedBuilder 驱动，rs 的通知到不了这里）
                 if (rs.book.format == BookFormat.txt && !rs.book.isOnline)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: const Text('编码'),
-                    subtitle: Text(_encodingLabel(rs.book.encoding)),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: _showEncodingPicker,
+                  ListenableBuilder(
+                    listenable: rs,
+                    builder: (ctx, _) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('编码'),
+                      subtitle: Text(_encodingLabel(rs.book.encoding)),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _showEncodingPicker,
+                    ),
                   ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,

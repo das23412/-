@@ -87,10 +87,10 @@ class TurnPageAnimation extends StatelessWidget {
 /// CustomClipper that creates the page-turning clipping path.
 class _PageTurnClipper extends CustomClipper<Path> {
   _PageTurnClipper({
-    required Animation<double> animation,
+    required this.animation,
     required this.animationTransitionPoint,
     this.direction = TurnDirection.leftToRight,
-  })  : animation = animation;
+  });
 
   // 逐帧重裁由 shouldReclip 的「上次裁剪值快照」驱动（见 _clippedAt）：
   // AnimatedBuilder 每帧重建都会拿到新 clipper 实例，快照值不同即返回 true。

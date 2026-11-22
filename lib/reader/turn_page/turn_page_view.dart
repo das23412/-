@@ -373,6 +373,9 @@ class TurnAnimationController {
 
   void dispose() {
     for (final controller in _controllers) {
+      // 跨章翻页时控制器可能仍在 animateTo 途中：先停再 dispose，
+      // 否则 ticker 活动期 dispose 在 debug/profile 构建触发断言
+      if (controller.isAnimating) controller.stop();
       controller.dispose();
     }
   }
