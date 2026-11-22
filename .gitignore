@@ -51,3 +51,6 @@ app.*.map.json
 key.properties
 **/*.keystore
 **/*.jks
+
+# Flutter 工具本地状态
+.flutter_tool_state
