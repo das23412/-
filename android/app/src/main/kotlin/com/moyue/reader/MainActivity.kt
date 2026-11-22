@@ -234,7 +234,7 @@ class MainActivity : FlutterActivity() {
         /** 缓存清理：文件最长保留 24 小时 */
         private const val CACHE_MAX_AGE_MS: Long = 24 * 60 * 60 * 1000L
 
-        /** 缓存清理：缓存目录文件总数上限，超过后从最旧的开始删 */
-        private const val CACHE_MAX_FILES: Int = 50
+        /** 缓存清理：缓存目录文件总数上限，超过后从最旧的开始删（覆盖批量打开一两百个的场景） */
+        private const val CACHE_MAX_FILES: Int = 300
     }
 }
