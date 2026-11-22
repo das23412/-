@@ -15,6 +15,7 @@ Uint8List buildMobi(
   int compression = 1,
   int headerLength = _mobiHeaderLen,
   int extraFlags = 0,
+  int textEncoding = 65001,
 }) {
   final numRecords = 1 + textRecords.length;
 
@@ -35,7 +36,12 @@ Uint8List buildMobi(
     headerLength & 0xFF,
   ]);
   b.add([0, 0, 0, 2]); // mobiType = 2
-  b.add([0, 0, 0xFD, 0xE9]); // textEncoding = 65001
+  b.add([
+    (textEncoding >> 24) & 0xFF,
+    (textEncoding >> 16) & 0xFF,
+    (textEncoding >> 8) & 0xFF,
+    textEncoding & 0xFF,
+  ]); // textEncoding（65001=UTF-8 / 1252=windows-1252）
   b.add(List<int>.filled(4, 0)); // uniqueID
   b.add(List<int>.filled(4, 0)); // fileVersion
   final current = b.length;
@@ -211,6 +217,25 @@ void main() {
       file.writeAsBytesSync(buildMobi([utf8('x' * 20)], compression: 17480));
       expect(() => MobiParser.parse(file),
           throwsA(isA<MobiUnsupportedException>()));
+    });
+
+    test('HTML 实体正文被解码', () {
+      // 旧实现 _stripToText 不解实体，&amp; &#x4F60; 等字面残留
+      final rec = utf8('第1章 实体\nTom&amp;Jerry &#x4F60;&#22909; &#8212; 完。');
+      file.writeAsBytesSync(buildMobi([rec]));
+      final book = MobiParser.parse(file);
+      final text = book.chapters.map((c) => c.text).join('\n');
+      expect(text, contains('Tom&Jerry 你好 — 完。'));
+    });
+
+    test('windows-1252 高位字节（0x80-0x9F）正确解码', () {
+      // 0x80=€ 0x91=‘ 0x92=’ 0x93=“ 0x94=” 0x96=– 0x97=—，
+      // 旧实现按 Latin-1 逐字节映射全部错位
+      final rec = [0x80, 0x91, 0x92, 0x93, 0x94, 0x96, 0x97];
+      file.writeAsBytesSync(buildMobi([rec], textEncoding: 1252));
+      final book = MobiParser.parse(file);
+      final text = book.chapters.map((c) => c.text).join('\n');
+      expect(text, contains('\u20AC\u2018\u2019\u201C\u201D\u2013\u2014'));
     });
   });
 }

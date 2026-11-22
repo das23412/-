@@ -58,6 +58,44 @@ void main() {
     expect(CharsetDecoder.decode(const []), '');
   });
 
+  test('UTF-16LE 无 BOM 中文样本', () {
+    // 中英混排样本：纯 CJK 的 BE 字节按 LE 重排后仍落在 CJK 区，
+    // 会骗过启发式；混入 ASCII 后错判率才明显。样本重复两次超过
+    // 64 字节采样阈值。
+    const text = '第一章 风起云涌 ABC 123 ';
+    final full = text + text;
+    final bytes = <int>[];
+    for (final cu in full.codeUnits) {
+      bytes
+        ..add(cu & 0xFF)
+        ..add((cu >> 8) & 0xFF);
+    }
+    expect(bytes.length, greaterThanOrEqualTo(64));
+    expect(CharsetDecoder.decode(bytes), full);
+  });
+
+  test('UTF-16BE 无 BOM 中文样本', () {
+    // 纯中文 BE 按 LE 试解时每个汉字仍是 CJK 码位（LE 先试且会赢），
+    // 必须带 ASCII 才能让 LE 试解的可读占比掉到阈值之下
+    const text = '第一章 风起云涌 ABC 123 ';
+    final full = text + text;
+    final bytes = <int>[];
+    for (final cu in full.codeUnits) {
+      bytes
+        ..add((cu >> 8) & 0xFF)
+        ..add(cu & 0xFF);
+    }
+    expect(CharsetDecoder.decode(bytes), full);
+  });
+
+  test('纯 ASCII 不误判为 UTF-16', () {
+    // ASCII 字节对按 UTF-16 重排后部分落在 CJK 区，但可读占比
+    // 低于 0.85 阈值，两个方向都应拒绝，最终走 UTF-8
+    const text = 'Hello World 123 ' * 8;
+    expect(text.codeUnits.length, greaterThanOrEqualTo(64));
+    expect(CharsetDecoder.decode(utf8.encode(text)), text);
+  });
+
   test('UTF-8 混入单个坏字节：容忍解码而非整本回退 GBK', () {
     // 长文本：单个坏字节的替换率才会低于阈值（短串会走 GBK 回退）
     final text = '这是正文第一段，情节正常推进。第二段继续叙事。' * 60;

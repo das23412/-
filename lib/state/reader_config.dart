@@ -13,8 +13,23 @@ class ReaderConfig extends ChangeNotifier {
   final AppSettings settings = AppSettings.instance;
   bool fontReady = false;
 
+  /// 自定义字体指纹（路径 + 文件大小）：换字体后 key 变化，
+  /// invalidateLayouts 才能真正清掉按旧字体排出的版式。
+  String get fontKey {
+    final path = settings.customFontPath;
+    if (path.isEmpty) return '';
+    int size = 0;
+    try {
+      size = File(path).lengthSync();
+    } catch (_) {
+      // 字体文件可能已被移动或删除：退化为 0，仅靠路径参与 key
+    }
+    return '$path|$size';
+  }
+
   String get layoutKey =>
-      '${settings.fontSize}_${settings.lineHeight}_${settings.indent}_$fontReady';
+      '${settings.fontSize}_${settings.lineHeight}_${settings.indent}_$fontReady'
+      '_${fontKey.hashCode}';
 
   void setFontSize(double v) {
     settings.fontSize = v;
@@ -91,9 +106,25 @@ class ReaderConfig extends ChangeNotifier {
   }
 
   Future<void> clearCustomFont() async {
+    // 旧字体文件只在应用文档目录内才删；用户外部原文件一律不动
+    await _deleteIfInAppDocs(settings.customFontPath);
     settings.customFontPath = '';
     fontReady = false;
     notifyListeners();
+  }
+
+  /// 删除应用文档目录内的残留文件；目录外路径（用户自选的原文件）不动。
+  Future<void> _deleteIfInAppDocs(String path) async {
+    if (path.isEmpty) return;
+    try {
+      final root = p.normalize((await getApplicationDocumentsDirectory()).path);
+      final target = p.normalize(path);
+      if (!target.startsWith('$root$p.separator')) return;
+      final f = File(target);
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {
+      // 清理失败不影响主流程
+    }
   }
 
   /// 选择自定义背景图。返回 null 表示成功。
@@ -116,6 +147,11 @@ class ReaderConfig extends ChangeNotifier {
       // 旧的固定名背景文件清理（历史版本写入的）
       final legacy = File(p.join(dir.path, 'custom_bg.jpg'));
       if (legacy.existsSync()) legacy.deleteSync();
+      // 上一张自定义背景（应用文档目录内的）一并删除，多次导入不残留旧文件
+      final oldBg = settings.customBgPath;
+      if (oldBg.isNotEmpty && oldBg != dest) {
+        await _deleteIfInAppDocs(oldBg);
+      }
       settings.customBgPath = dest;
       settings.bgIndex = -1;
       notifyListeners();

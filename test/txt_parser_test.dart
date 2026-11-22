@@ -42,6 +42,40 @@ void main() {
     expect(chapters[1].title, '第1章 正文开始');
   });
 
+  test('gap=2 的三个真短章节不被折叠（诗集/日记体）', () {
+    // "标题+1 行正文"的真实短章节标记间隔恰为 2，收紧后的折叠
+    // 阈值（≤1）不应再吞掉章界
+    final text = '第1章 甲\n正文一。\n第2章 乙\n正文二。\n第3章 丙\n正文三。';
+    final chapters = TxtParser.splitChapters('书', text);
+    expect(chapters.length, 3);
+    expect(chapters[0].title, '第1章 甲');
+    expect(chapters[1].title, '第2章 乙');
+    expect(chapters[2].title, '第3章 丙');
+  });
+
+  test('目录行不再成为章节标题（主路径守卫生效）', () {
+    // 旧实现守卫只存在于无人调用的 looksLikeChapterTitle，主路径
+    // 目录行照常命中标题正则成为假章节；下沉后 marks 收集即排除
+    final text = [
+      '第一章 甲…………1',
+      '第二章 乙…………2',
+      '第三章 丙…………3',
+      '第1章 正文开始',
+      '内容一。',
+      '第2章 再续',
+      '内容二。',
+    ].join('\n');
+    final chapters = TxtParser.splitChapters('书', text);
+    for (final c in chapters) {
+      expect(c.title.contains('…………'), isFalse);
+    }
+    // 目录块作为开篇内容保留，真章节正常切出
+    expect(chapters.first.title, '开篇');
+    expect(chapters[1].title, '第1章 正文开始');
+    expect(chapters[2].title, '第2章 再续');
+    expect(chapters[1].text, contains('内容一'));
+  });
+
   test('目录页行不再产生假章节', () {
     final text = '第一章 风起…………1\n第二章 云涌…………5\n第1章 正文开始\n这里是真的正文。';
     final chapters = TxtParser.splitChapters('书', text);

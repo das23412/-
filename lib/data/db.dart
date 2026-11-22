@@ -207,6 +207,15 @@ class AppDb {
     await db.update('books', b.toMap(), where: 'id = ?', whereArgs: [b.id]);
   }
 
+  /// 批量置顶/取消置顶：单条 UPDATE ... WHERE id IN (...)，返回受影响行数。
+  Future<int> setPinnedBatch(List<int> ids, bool pinned) async {
+    if (ids.isEmpty) return 0; // 空列表会生成非法的 IN ()
+    final db = await database;
+    final q = List.filled(ids.length, '?').join(',');
+    return db.update('books', {'pinned': pinned ? 1 : 0},
+        where: 'id IN ($q)', whereArgs: ids);
+  }
+
   Future<void> deleteBooks(List<int> ids) async {
     if (ids.isEmpty) return; // 空列表会生成非法的 IN ()
     final db = await database;

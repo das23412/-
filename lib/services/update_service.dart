@@ -187,6 +187,9 @@ class UpdateService {
         rethrow;
       }
       if (received == 0) throw const UpdateException('服务器没有返回内容');
+      // 取舍：发布资产缺 digest（expectedSha256 为空）时跳过 sha256 校验、照常安装，
+      // 不让校验能力缺失阻断升级链路；此时由通用设置页以「下载完成（未能校验安装包）」
+      // 降级提示，与 UpdateInfo.sha256 的文档语义保持一致。
       if (expectedSha256 != null && expectedSha256.isNotEmpty) {
         final actual = await sha256.bind(tmp.openRead()).first;
         if (actual.toString() != expectedSha256.toLowerCase()) {

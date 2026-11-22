@@ -21,8 +21,8 @@ class Fb2Parser {
     final bodies = doc.findAllElements('body').toList();
     for (final body in bodies) {
       if (body.getAttribute('name') != null) continue;
-      final sections = body.findElements('section').toList();
-      if (sections.isEmpty) {
+      final topSections = body.findElements('section').toList();
+      if (topSections.isEmpty) {
         // 没有分节：整段作为一章
         final text = _paragraphsText(body);
         if (text.trim().isNotEmpty) {
@@ -31,13 +31,33 @@ class Fb2Parser {
         continue;
       }
       int seq = 0;
-      for (final section in sections) {
-        final text = _paragraphsText(section);
-        if (text.trim().isEmpty) continue;
-        final title = _sectionTitle(section) ?? '第${seq + 1}章';
-        chapters.add(ParsedChapter(title, text));
-        seq++;
+      // 递归展开 section 树：嵌套 section（卷>章）的每层独立成章，
+      // 旧实现只取 body 直接子级，内层章标题全丢、整卷并成一章。
+      void collect(XmlElement parent) {
+        for (final el in parent.childElements) {
+          if (el.name.local.toLowerCase() != 'section') continue;
+          if (el.findElements('section').isNotEmpty) {
+            // 容器节：自身段落（卷首语）先成章，再递归子节；
+            // 自身无正文则不产出空章，只展开子节
+            final direct = _directText(el);
+            if (direct.isNotEmpty) {
+              final title = _sectionTitle(el) ?? '第${seq + 1}章';
+              chapters.add(ParsedChapter(title, direct));
+              seq++;
+            }
+            collect(el);
+          } else {
+            // 叶子节：整节一章
+            final text = _paragraphsText(el);
+            if (text.trim().isEmpty) continue;
+            final title = _sectionTitle(el) ?? '第${seq + 1}章';
+            chapters.add(ParsedChapter(title, text));
+            seq++;
+          }
+        }
       }
+
+      collect(body);
     }
     if (chapters.isEmpty) throw const FormatException('FB2 没有可读的正文');
     return ParsedBook(chapters);
@@ -57,6 +77,8 @@ class Fb2Parser {
   }
 
   /// 收集节点下所有 `<p>` / `<v>` 文本，段落间以换行分隔。
+  /// 不下钻嵌套 section：容器节的子节内容由递归收集另行成章，
+  /// 避免整卷文本与子章重复计入。
   static String _paragraphsText(XmlElement root) {
     final buf = StringBuffer();
     void walk(XmlElement el) {
@@ -69,6 +91,8 @@ class Fb2Parser {
           continue; // 标题单独处理，注释/题记不进正文
         } else if (name == 'image' || name == 'binary') {
           continue;
+        } else if (name == 'section') {
+          continue; // 嵌套小节由 collect 递归处理
         } else {
           walk(child);
         }
@@ -76,6 +100,20 @@ class Fb2Parser {
     }
 
     walk(root);
+    return buf.toString().trim();
+  }
+
+  /// 收集容器节自身的直接 `<p>` / `<v>` 文本（不下钻嵌套 section，
+  /// 避免卷首语与子节内容重复计入）。
+  static String _directText(XmlElement root) {
+    final buf = StringBuffer();
+    for (final child in root.childElements) {
+      final name = child.name.local.toLowerCase();
+      if (name == 'p' || name == 'v') {
+        final t = child.innerText.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (t.isNotEmpty) buf.writeln(t);
+      }
+    }
     return buf.toString().trim();
   }
 }

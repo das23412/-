@@ -57,6 +57,33 @@ class CharsetDecoder {
     }
   }
 
+  /// windows-1252 高位区（0x80-0x9F）码表：27 个已定义码位 + 5 个未定义
+  /// 位（0x81/0x8D/0x8F/0x90/0x9D，按 WHATWG 规范映射为字节本身）。
+  /// €、各种弯引号、破折号、省略号等英文高频标点都在这一段，按
+  /// Latin-1 逐字节映射全部错位。
+  static const List<int?> _cp1252High = [
+    0x20AC, null, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, // 0x80-0x87
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, null, 0x017D, null, // 0x88-0x8F
+    null, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, // 0x90-0x97
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, null, 0x017E, 0x0178, // 0x98-0x9F
+  ];
+
+  /// 按 windows-1252 解码：0x80-0x9F 查 cp1252 码表，其余字节与 Latin-1
+  /// 相同直接映射。整段一次性用 StringBuffer 构建，避免逐字节
+  /// map().join() 产生海量小字符串对象。
+  static String decodeWindows1252(List<int> bytes) {
+    final buf = StringBuffer();
+    for (final b in bytes) {
+      if (b >= 0x80 && b <= 0x9F) {
+        final v = _cp1252High[b - 0x80];
+        buf.write(v == null ? String.fromCharCode(b) : String.fromCharCode(v));
+      } else {
+        buf.writeCharCode(b);
+      }
+    }
+    return buf.toString();
+  }
+
   /// 样本文本可读性：CJK/ASCII/常见标点占比高且几乎无控制符即认为可读。
   static bool _looksLikeText(String sample) {
     if (sample.isEmpty) return false;

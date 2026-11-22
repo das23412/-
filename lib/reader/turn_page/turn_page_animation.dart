@@ -86,11 +86,14 @@ class TurnPageAnimation extends StatelessWidget {
 
 /// CustomClipper that creates the page-turning clipping path.
 class _PageTurnClipper extends CustomClipper<Path> {
-  const _PageTurnClipper({
-    required this.animation,
+  _PageTurnClipper({
+    required Animation<double> animation,
     required this.animationTransitionPoint,
     this.direction = TurnDirection.leftToRight,
-  });
+  })  : animation = animation,
+        // 进度重绘由 animation 直接驱动（每帧 markNeedsClip），
+        // shouldReclip 只在静态参数变化时介入。
+        super(repaint: animation);
 
   /// The animation that controls the page-turning effect.
   final Animation<double> animation;
@@ -185,20 +188,26 @@ class _PageTurnClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(_PageTurnClipper oldClipper) {
-    return true;
+    // 新旧委托持有同一个 Animation 实例，比较 animation.value 恒为 false，
+    // 会让翻页冻结；进度变化已由 repaint 监听驱动，这里只比较静态参数。
+    return oldClipper.animation != animation ||
+        oldClipper.animationTransitionPoint != animationTransitionPoint ||
+        oldClipper.direction != direction;
   }
 }
 
 /// CustomPainter that paints the backside of the pages during the animation.
 class _OverleafPainter extends CustomPainter {
-  const _OverleafPainter({
-    required this.animation,
+  _OverleafPainter({
+    required Animation<double> animation,
     required this.color,
     required this.overleafBorderColor,
     required this.overleafBorderWidth,
     required this.animationTransitionPoint,
     required this.direction,
-  });
+  })  : animation = animation,
+        // 进度重绘由 animation 直接驱动（每帧 markNeedsPaint）。
+        super(repaint: animation);
 
   /// The animation that controls the page-turning effect.
   final Animation<double> animation;
@@ -224,6 +233,13 @@ class _OverleafPainter extends CustomPainter {
     final width = size.width;
     final height = size.height;
     final animationProgress = animation.value;
+
+    // 进度为 0（未开始）或 ≥1（已完成）时没有可见的翻页叶子：直接返回，
+    // 不再构造路径。进度恰为 0 时下方 W*H/(W²+H²) 会得到 0/0 = NaN，
+    // 把 NaN 坐标画进路径行为未定义；提前返回也省掉阴影模糊/填充/描边开销。
+    if (animationProgress <= 0 || animationProgress >= 1) {
+      return;
+    }
 
     late final double topCornerX;
     late final double bottomCornerX;
@@ -321,9 +337,8 @@ class _OverleafPainter extends CustomPainter {
         ..lineTo(bottomCorner.dx, bottomCorner.dy)
         ..lineTo(bottomFold.dx, bottomFold.dy)
         ..close();
-    } else {
-      path.reset();
     }
+    // 进度 ≥1 已在 paint 开头提前返回，此处 progress < 1 恒成立。
 
     // 折缝投影：卷起的叶子在下方页面上的柔和阴影（向揭示侧偏移）
     final shadowShift = direction == TurnDirection.rightToLeft ? 16.0 : -16.0;
@@ -350,6 +365,12 @@ class _OverleafPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_OverleafPainter oldPainter) {
-    return true;
+    // 同 shouldReclip：进度重绘走 repaint 监听，这里只比较静态参数。
+    return oldPainter.animation != animation ||
+        oldPainter.color != color ||
+        oldPainter.overleafBorderColor != overleafBorderColor ||
+        oldPainter.overleafBorderWidth != overleafBorderWidth ||
+        oldPainter.animationTransitionPoint != animationTransitionPoint ||
+        oldPainter.direction != direction;
   }
 }

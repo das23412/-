@@ -2,10 +2,24 @@
 /// 标题识别、目录块折叠、开篇保留与体量分块逻辑，
 /// 避免三份实现规则漂移（历史 bug 温床）。
 class ChapterSplitter {
+  /// 目录行特征一：省略号/点导线 + 页码结尾（如「第一章 风起…………1」）。
+  static final RegExp tocDotLeaderLine = RegExp(r'[.…·•]{2,}\s*[0-9]{1,4}\s*$');
+
+  /// 目录行特征二：多个空格 + 页码结尾（如「第3章 雷动  12」）。
+  static final RegExp tocSpacePageLine = RegExp(r'\s{2,}[0-9]{1,4}\s*$');
+
+  /// 判断一行是否是目录页条目（标题特征 + 页码结尾）。
+  static bool looksLikeTocLine(String line) {
+    final t = line.trim();
+    return tocDotLeaderLine.hasMatch(t) || tocSpacePageLine.hasMatch(t);
+  }
+
   /// 按标题模式切分 [text]。
   ///
   /// - [titlePatterns]：任一模式命中的短行视为章节标题；
-  /// - [collapseTocRuns]：连续 3 个及以上、彼此间隔 ≤2 行的标题块
+  /// - [excludeTocLines]：命中标题特征的行若带目录行特征（页码结尾），
+  ///   不作为章节标记（目录页守卫，TXT/MOBI/HTML 主路径均应开启）；
+  /// - [collapseTocRuns]：连续 3 个及以上、彼此间隔 ≤1 行的标题块
   ///   （书前目录页特征）只保留第一个标记；
   /// - [chunkFallback]：几乎检测不到标记时按 [chunkSize] 字切块，
   ///   章节名为"第N部分"（TXT 散文体）；false 时返回空列表，由调用方兜底。
@@ -15,6 +29,7 @@ class ChapterSplitter {
     required String text,
     required String bookTitle,
     required List<RegExp> titlePatterns,
+    bool excludeTocLines = false,
     bool collapseTocRuns = false,
     bool chunkFallback = false,
     String bookTitleFallback = '正文',
@@ -25,16 +40,22 @@ class ChapterSplitter {
     for (int i = 0; i < lines.length; i++) {
       final t = lines[i].trim();
       if (t.isEmpty || t.length > 50) continue;
-      if (titlePatterns.any((p) => p.hasMatch(t))) marks.add(i);
+      if (!titlePatterns.any((p) => p.hasMatch(t))) continue;
+      // 目录行排除：命中标题特征的行若带页码结尾，是目录条目不是章节
+      if (excludeTocLines && looksLikeTocLine(t)) continue;
+      marks.add(i);
     }
 
     if (collapseTocRuns) {
-      // 目录块折叠：连续 ≥3 个、彼此间隔 ≤2 行的标记只保留第一个
+      // 目录块折叠：连续 ≥3 个、彼此间隔 ≤1 行的标记只保留第一个。
+      // 间隔阈值收紧为 ≤1（相邻行）："标题+1 行正文"的真实短章节
+      //（诗集/日记体）标记间隔恰为 2，旧阈值 ≤2 会把连续 3 章吞成一个；
+      // 目录页条目彼此紧邻（间隔 0-1），收紧后仍能正确折叠。
       final collapsed = <int>[];
       int prev = -10;
       int runLen = 0;
       for (final m in marks) {
-        if (m - prev > 2) {
+        if (m - prev > 1) {
           if (runLen >= 3) {
             collapsed.removeRange(
                 collapsed.length - (runLen - 1), collapsed.length);

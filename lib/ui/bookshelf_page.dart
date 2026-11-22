@@ -47,13 +47,15 @@ class _BookshelfPageState extends State<BookshelfPage> {
   void _onLibChanged() {
     if (!mounted) return;
     final lib = _observedLib!;
+    // 双通道订阅收敛：界面刷新统一由 build 里的 context.watch 负责（同一
+    // 状态对象的通知 Provider 已订阅），手动订阅只保留“扫描候选弹层”
+    // 这一件事，避免无条件的 setState 造成的重复重建。
     if (lib.pendingCandidates.isNotEmpty && !_candidateSheetOpen) {
       _candidateSheetOpen = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showCandidateSheet();
       });
     }
-    setState(() {});
   }
 
   /// 候选导入清单：先勾选，再入库。
@@ -257,14 +259,6 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 Navigator.pop(ctx);
                 Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const LinkImportPage()));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.manage_search),
-              title: const Text('全盘扫描手机里的小说'),
-              onTap: () {
-                Navigator.pop(ctx);
-                lib.scan(fullScan: true);
               },
             ),
             ListTile(

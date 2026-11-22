@@ -50,15 +50,30 @@ class LibraryState extends ChangeNotifier {
   bool selectionMode = false;
   final Set<int> selectedIds = {};
 
+  /// visibleBooks 结果缓存：books/搜索词/标签/排序任一变化时置脏，
+  /// 下次访问重算一次，其余访问直接复用，书架频繁重建不再重复过滤+排序。
+  List<Book> _visibleCache = const [];
+  bool _visibleDirty = true;
+
   // ---------- 数据加载 ----------
 
   Future<void> reload() async {
     books = await _db.allBooks();
     tags = await _db.allTags();
+    _visibleDirty = true;
     notifyListeners();
   }
 
   List<Book> get visibleBooks {
+    if (_visibleDirty) {
+      _visibleCache = _computeVisibleBooks();
+      _visibleDirty = false;
+    }
+    return _visibleCache;
+  }
+
+  /// 重算过滤+排序结果（仅在缓存失效时调用）。
+  List<Book> _computeVisibleBooks() {
     Iterable<Book> list = books;
     if (searchQuery.isNotEmpty) {
       final q = searchQuery.toLowerCase();
@@ -94,6 +109,7 @@ class LibraryState extends ChangeNotifier {
 
     try {
       books = await _db.allBooks();
+      _visibleDirty = true;
       // 权限预检：未授权时安卓会返回空目录列表，扫描注定不完整
       final manageGranted = await Permission.manageExternalStorage.isGranted;
       scanRestricted = !manageGranted;
@@ -135,11 +151,10 @@ class LibraryState extends ChangeNotifier {
         scanHint = '发现 ${candidates.length} 本候选书籍，请在清单中勾选导入';
       }
       settings.firstScanDone = true;
-      notifyListeners();
     } catch (e) {
       scanHint = '扫描失败：$e';
-      notifyListeners();
     } finally {
+      // 过程中只更新字段不 notify，统一在 finally 收尾：全程开始 1 次 + 结束 1 次
       scanning = false;
       notifyListeners();
     }
@@ -163,9 +178,9 @@ class LibraryState extends ChangeNotifier {
     final n = await _db.insertBooks(toInsert);
     if (toIgnore.isNotEmpty) await _ignorePaths(toIgnore);
     pendingCandidates = [];
-    await reload();
+    // scanHint 先赋值再 reload：reload 自带一次 notify，避免连续重复通知
     scanHint = n > 0 ? '已导入 $n 本书' : '';
-    notifyListeners();
+    await reload();
     return n;
   }
 
@@ -221,41 +236,58 @@ class LibraryState extends ChangeNotifier {
   // ---------- 导入 ----------
 
   /// 手动选文件导入：复制到应用私有目录，不依赖任何存储权限。
+  /// 返回导入成功的书名列表；路径冲突被库忽略的旧书也计入统计。
   Future<List<String>> importFiles(List<String> pickedPaths) async {
     final importedTitles = <String>[];
     final baseDir = await _importDir();
     for (final src in pickedPaths) {
-      try {
-        final srcFile = File(src);
-        if (!srcFile.existsSync()) continue;
-        final name = p.basename(src);
-        final format = BookFormat.fromPath(name);
-        if (format == BookFormat.unknown) continue;
-        final dest = p.join(baseDir.path,
-            '${DateTime.now().millisecondsSinceEpoch}_${_importSeq++}_${p.basename(name)}');
-        await srcFile.copy(dest);
-        final stat = File(dest).statSync();
-        final book = Book(
-          path: dest,
-          title: TextUtils.cleanTitle(p.basenameWithoutExtension(src)),
-          format: format,
-          sizeBytes: stat.size,
-          addedAt: DateTime.now().millisecondsSinceEpoch,
-          imported: true,
-        );
-        final id = await _db.insertBook(book);
-        if (id > 0) importedTitles.add(book.title);
-      } catch (_) {
-        // 单个失败不影响其他
-      }
+      final book = await _importOne(baseDir, src);
+      if (book != null) importedTitles.add(book.title);
     }
     await reload();
     return importedTitles;
   }
 
-  /// 其他 App “用墨阅打开”传来的文件（原生层已拷贝到缓存目录）。
-  Future<void> importFromIntent(String path) async {
-    await importFiles([path]);
+  /// 导入单个文件：复制到导入目录、入库，返回带 id 的新书（调用方可直接打开）。
+  /// 文件不存在/格式不支持/拷贝或入库异常返回 null；路径冲突被忽略（id<=0）
+  /// 时返回库里已存在的旧记录，调用方照常统计与打开。
+  Future<Book?> _importOne(Directory baseDir, String src) async {
+    try {
+      final srcFile = File(src);
+      if (!srcFile.existsSync()) return null;
+      final name = p.basename(src);
+      final format = BookFormat.fromPath(name);
+      if (format == BookFormat.unknown) return null;
+      final dest = p.join(baseDir.path,
+          '${DateTime.now().millisecondsSinceEpoch}_${_importSeq++}_${p.basename(name)}');
+      await srcFile.copy(dest);
+      final stat = File(dest).statSync();
+      final book = Book(
+        path: dest,
+        title: TextUtils.cleanTitle(p.basenameWithoutExtension(src)),
+        format: format,
+        sizeBytes: stat.size,
+        addedAt: DateTime.now().millisecondsSinceEpoch,
+        imported: true,
+      );
+      final id = await _db.insertBook(book);
+      // Book.id 是 final：用 copyWith 带回新插入的自增 id，
+      // ReaderPage 的进度保存/书签/目录都依赖 book.id
+      if (id > 0) return book.copyWith(id: id);
+      return await _db.bookByPath(dest);
+    } catch (_) {
+      // 单个失败不影响其他
+      return null;
+    }
+  }
+
+  /// 其他 App “用墨阅打开/分享”传来的文件（原生层已拷贝到缓存目录）。
+  /// 返回入库后的书（含 id，调用方直接打开），失败返回 null。
+  /// 不在此处 reload：批量导入由调用方整批完成后统一刷一次书架，
+  /// 避免 25 个文件触发 25 次全量查库。
+  Future<Book?> importFromIntent(String path) async {
+    final baseDir = await _importDir();
+    return _importOne(baseDir, path);
   }
 
   /// 应用私有导入目录（也是链接下载的目标目录）。
@@ -276,7 +308,7 @@ class LibraryState extends ChangeNotifier {
     if (source != null) {
       try {
         // 详情页失败不致命：继续用搜索结果的信息
-        final info = await SourceService.bookInfo(source, hint);
+        final info = await SourceService.bookInfoIsolated(source, hint);
         name = info.book.name;
         author = info.book.author;
         coverUrl = info.book.coverUrl;
@@ -338,17 +370,12 @@ class LibraryState extends ChangeNotifier {
     await reload();
   }
 
-  /// 批量置顶（只置顶其中未置顶的书），一次刷新书架。
+  /// 批量置顶：单条 UPDATE ... WHERE id IN (...) 完成（不再逐本 update），
+  /// 随后统一 reload 刷新书架。
   Future<void> pinByIds(Set<int> ids) async {
-    var changed = false;
-    for (final b in books) {
-      if (ids.contains(b.id) && !b.pinned) {
-        b.pinned = true;
-        await _db.updateBook(b);
-        changed = true;
-      }
-    }
-    if (changed) await reload();
+    if (ids.isEmpty) return;
+    await _db.setPinnedBatch(ids.toList(), true);
+    await reload();
   }
 
   Future<void> setTags(Book b, List<String> tags) async {
@@ -359,15 +386,13 @@ class LibraryState extends ChangeNotifier {
 
   Future<void> deleteByIds(List<int> ids, {bool deleteFiles = false}) async {
     if (deleteFiles) {
-      for (final id in ids) {
-        final b = books.firstWhere((e) => e.id == id, orElse: () => Book(
-            path: '', title: '', format: BookFormat.unknown, sizeBytes: 0, addedAt: 0));
-        if (b.imported && b.path.isNotEmpty) {
-          try {
-            File(b.path).deleteSync();
-          } catch (_) {}
-        }
-      }
+      // 文件删除移入 compute 隔离线程：主 isolate 只收集待删路径
+      //（imported 副本且路径非空才删），逐个同步 IO 不再占用 UI 线程
+      final paths = books
+          .where((b) => ids.contains(b.id) && b.imported && b.path.isNotEmpty)
+          .map((b) => b.path)
+          .toList();
+      await compute(_deleteFiles, paths);
     }
     await _db.deleteBooks(ids);
     exitSelectionMode();
@@ -398,7 +423,7 @@ class LibraryState extends ChangeNotifier {
   void selectAll() {
     selectedIds
       ..clear()
-      ..addAll(visibleBooks.map((b) => b.id!).whereType<int>());
+      ..addAll(visibleBooks.map((b) => b.id).whereType<int>());
     notifyListeners();
   }
 
@@ -427,4 +452,18 @@ class LibraryState extends ChangeNotifier {
 /// 逐本检查文件是否存在（隔离线程执行，compute 目标须为顶层函数）。
 List<String> _findMissingFiles(List<String> paths) {
   return paths.where((p) => !File(p).existsSync()).toList();
+}
+
+/// 批量删除导入副本文件（隔离线程执行，compute 目标须为顶层函数）。
+/// 返回删除失败的个数。
+int _deleteFiles(List<String> paths) {
+  var failed = 0;
+  for (final path in paths) {
+    try {
+      File(path).deleteSync();
+    } catch (_) {
+      failed++;
+    }
+  }
+  return failed;
 }

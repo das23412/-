@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -39,6 +40,7 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
   List<_SourceCheck> _checks = [];
   bool _running = false;
   bool _cancelled = false;
+  int _gen = 0; // 检测轮次：停止后立即放行新一轮，旧 worker 凭轮次号在间隙退出
 
   @override
   void dispose() {
@@ -63,39 +65,51 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
       return;
     }
     _cancelled = false;
+    _gen++;
+    final gen = _gen;
+    final checks = sources.map(_SourceCheck.new).toList();
     setState(() {
       _running = true;
-      _checks = sources.map(_SourceCheck.new).toList();
+      _checks = checks;
     });
     // 并发上限 3：几十个源同时开 socket 会瞬间打满连接池
     var index = 0;
     Future<void> worker() async {
-      while (!_cancelled && index < _checks.length) {
-        final c = _checks[index];
+      // 只认本轮的 checks 列表与轮次号：停止后立刻可开新一轮，旧 worker 在间隙退出
+      while (gen == _gen && !_cancelled && index < checks.length) {
+        final c = checks[index];
         index++;
         c.running = true;
         _refresh();
-        await _runOne(c, keyword);
+        await _runOne(c, keyword, gen);
         c.running = false;
         _refresh();
       }
     }
 
     final workers = <Future<void>>[
-      for (var i = 0; i < 3 && i < _checks.length; i++) worker(),
+      for (var i = 0; i < 3 && i < checks.length; i++) worker(),
     ];
     unawaited(Future.wait(workers).then((_) {
-      if (mounted && !_cancelled) setState(() => _running = false);
-      if (mounted && _cancelled) setState(() => _running = false);
+      // 只有当前轮次的收尾才能关 running：停止路径已在 _stop 里立即置过
+      if (mounted && gen == _gen) setState(() => _running = false);
     }));
   }
 
   void _stop() {
-    _cancelled = true;
+    // 立即置 _running=false：PopScope 与按钮态马上放行；
+    // _cancelled 保留给 worker 在步骤间隙退出，在途结果到达后按中止丢弃不写状态。
+    setState(() {
+      _running = false;
+      _cancelled = true;
+    });
     _snack('已停止检测');
   }
 
-  Future<void> _runOne(_SourceCheck c, String keyword) async {
+  /// 本轮是否已中止：点了停止，或本轮已被新一轮检测取代。
+  bool _aborted(int gen) => _cancelled || gen != _gen;
+
+  Future<void> _runOne(_SourceCheck c, String keyword, int gen) async {
     final s = c.source;
 
     // 第 1 步：搜索
@@ -103,46 +117,66 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
     List<SourceBook> books;
     try {
       books = await SourceService.search(s, keyword);
-      c.steps[0] = _StepResult(
-        _StepStatus.ok,
-        sw.elapsedMilliseconds,
-        '《${books.first.name}》等 ${books.length} 条结果',
-        '',
-      );
     } on SourceUnsupportedException catch (e) {
-      c.steps[0] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
+      if (!_aborted(gen)) {
+        c.steps[0] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
+        _refresh();
+      }
       return;
     } catch (e) {
-      c.steps[0] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
+      if (!_aborted(gen)) {
+        c.steps[0] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
+        _refresh();
+      }
       return;
     }
-    if (_cancelled) return;
+    if (_aborted(gen)) return; // 停止后丢弃在途结果，不写状态
+    c.steps[0] = _StepResult(
+      _StepStatus.ok,
+      sw.elapsedMilliseconds,
+      '《${books.first.name}》等 ${books.length} 条结果',
+      '',
+    );
+    _refresh();
 
-    // 第 2 步：目录
+    // 第 2 步：目录（详情页 → 目录页）
     sw.reset();
     List<SourceChapter> toc;
     try {
-      final info = await SourceService.bookInfo(s, books.first);
+      final info = await SourceService.bookInfoIsolated(s, books.first);
+      if (_aborted(gen)) return; // 详情回来已中止：不再发目录请求
       toc = await SourceService.loadToc(s, info.tocUrl);
-      c.steps[1] = _StepResult(
-        _StepStatus.ok,
-        sw.elapsedMilliseconds,
-        '共 ${toc.length} 章 · 首章：${toc.first.title}',
-        '',
-      );
     } on SourceUnsupportedException catch (e) {
-      c.steps[1] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
+      if (!_aborted(gen)) {
+        c.steps[1] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
+        _refresh();
+      }
       return;
     } catch (e) {
-      c.steps[1] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
+      if (!_aborted(gen)) {
+        c.steps[1] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
+        _refresh();
+      }
       return;
     }
-    if (_cancelled) return;
+    if (_aborted(gen)) return; // 停止后丢弃在途结果，不写状态
+    c.steps[1] = _StepResult(
+      _StepStatus.ok,
+      sw.elapsedMilliseconds,
+      '共 ${toc.length} 章 · 首章：${toc.first.title}',
+      '',
+    );
+    _refresh();
 
-    // 第 3 步：正文
+    // 第 3 步：正文（compute 隔离线程执行：书源正则不能跑 UI 线程；超时兜底防挂死）
     sw.reset();
     try {
-      final content = await SourceService.loadContent(s, toc.first.url);
+      final content = await compute(loadContentInIsolate,
+          {'raw': s.rawJson, 'url': toc.first.url}).timeout(
+        const Duration(minutes: 2),
+        onTimeout: () => throw SourceException('超时'),
+      );
+      if (_aborted(gen)) return; // 停止后丢弃在途结果，不写状态
       final sample = content.length > 60 ? content.substring(0, 60) : content;
       c.steps[2] = _StepResult(
         _StepStatus.ok,
@@ -150,10 +184,17 @@ class _SourceCheckPageState extends State<SourceCheckPage> {
         '${content.length} 字 · ${sample.replaceAll('\n', ' ')}…',
         '',
       );
+      _refresh();
     } on SourceUnsupportedException catch (e) {
-      c.steps[2] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
+      if (!_aborted(gen)) {
+        c.steps[2] = _StepResult(_StepStatus.unsupported, sw.elapsedMilliseconds, '', e.message);
+        _refresh();
+      }
     } catch (e) {
-      c.steps[2] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
+      if (!_aborted(gen)) {
+        c.steps[2] = _StepResult(_StepStatus.fail, sw.elapsedMilliseconds, '', e.toString());
+        _refresh();
+      }
     }
   }
 

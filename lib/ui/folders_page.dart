@@ -18,9 +18,11 @@ class _FoldersPageState extends State<FoldersPage> {
     final dir = await FilePicker.platform.getDirectoryPath(dialogTitle: '选择要扫描的文件夹');
     if (dir == null) return;
     final settings = AppSettings.instance;
-    // 归一化尾部分隔符再查重，避免 '/a/b' 与 '/a/b/' 重复添加
+    // 归一化尾部分隔符再查重，避免 '/a/b' 与 '/a/b/' 重复添加；
+    // 与 _removeFolder 约定一致：getter 返回的是缓存列表的引用，先复制再改，
+    // 避免持久化失败时内存已脏。
     final normalized = dir.endsWith('/') ? dir.substring(0, dir.length - 1) : dir;
-    final list = settings.scanFolders;
+    final list = List<String>.from(settings.scanFolders);
     if (!list.contains(normalized)) {
       list.add(normalized);
       await settings.setScanFolders(list);

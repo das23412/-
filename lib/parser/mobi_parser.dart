@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../core/charset.dart';
+import '../core/text_utils.dart';
 import 'chapter_splitter.dart';
 import 'parser.dart';
 
@@ -55,8 +56,9 @@ class MobiParser {
     String encodingName = 'utf8';
     int mobiVersion = 0;
     int extraFlags = 0;
-    // MOBI 扩展头
-    if (rec0.length >= 24 &&
+    // MOBI 扩展头：守卫 >=32，保证 getUint32(28)（textEncoding）的
+    // 4 个字节完整存在，长度 24-31 且带 MOBI 魔数的畸形头不再裸 RangeError
+    if (rec0.length >= 32 &&
         rec0[16] == 0x4D && rec0[17] == 0x4F &&
         rec0[18] == 0x42 && rec0[19] == 0x49) {
       // 'MOBI'
@@ -97,7 +99,8 @@ class MobiParser {
     final rawBytes = allBytes.takeBytes();
     final String html;
     if (encodingName == 'windows1252') {
-      html = rawBytes.map((e) => String.fromCharCode(e)).join();
+      // 0x80-0x9F 是 cp1252 特有段（€ 弯引号 – … 等），查表解码
+      html = CharsetDecoder.decodeWindows1252(rawBytes);
     } else {
       html = CharsetDecoder.decode(rawBytes);
     }
@@ -131,6 +134,9 @@ class MobiParser {
       text: text,
       bookTitle: '',
       titlePatterns: [_chapterMarkCn, _chapterMarkEn],
+      // 与 TXT/HTML 主路径一致：开目录守卫与目录块折叠
+      excludeTocLines: true,
+      collapseTocRuns: true,
     );
     return parts.map((p) => ParsedChapter(p.title, p.body)).toList();
   }
@@ -146,7 +152,9 @@ class MobiParser {
             caseSensitive: false),
         '\n');
     s = s.replaceAll(RegExp(r'<[^>]+>'), '');
-    return s.replaceAll('\r\n', '\n').replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    // 与 HTML/EPUB 路径对齐：正文里的 &amp; &#8217; 等实体一并解码
+    return TextUtils.decodeEntities(
+        s.replaceAll('\r\n', '\n').replaceAll(RegExp(r'\n{3,}'), '\n\n'));
   }
 
   /// 去除记录尾部的 extra data（trailing entries + multibyte overlap）。
@@ -199,6 +207,11 @@ class MobiParser {
 
 /// PalmDOC（LZ77 变体）解压。
 class PalmDoc {
+  /// 解压输出上限：畸形/恶意的压缩流可借回引爆炸式放大输出，
+  /// 超限判定为数据异常而不是无限膨胀内存（64MB 对单条 4KB 记录
+  /// 的合法解压已是天文数字）。
+  static const int _maxOutputBytes = 64 << 20; // 64MB
+
   static List<int> decompress(List<int> data) {
     // 输出放进可增长列表，LZ77 回引直接按下标读取。
     // 旧实现在回引循环里反复调用 out.toBytes()，每拷贝一个字节
@@ -207,6 +220,10 @@ class PalmDoc {
     int i = 0;
     final n = data.length;
     while (i < n) {
+      // 输出超限：压缩数据异常
+      if (out.length > _maxOutputBytes) {
+        throw const FormatException('压缩数据异常');
+      }
       final c = data[i++];
       if (c >= 1 && c <= 8) {
         // 后跟 c 个字面量
@@ -226,8 +243,9 @@ class PalmDoc {
         final len = (pair & 0x7) + 3;
         final start = out.length - dist;
         // dist 允许小于 len（重叠拷贝），边写边读保持 LZ77 语义；
-        // dist==0 是非法输入，跳过而不是越界崩溃
-        if (start < 0 || dist <= 0) break;
+        // 畸形对（start<0 / dist<=0）跳过该对继续解码，旧实现 break
+        // 会静默截断整条记录（章后半截消失且无告警）
+        if (start < 0 || dist <= 0) continue;
         for (int k = 0; k < len; k++) {
           out.add(out[start + k]);
         }

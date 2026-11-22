@@ -17,7 +17,10 @@ class Book {
   double percent; // 0~100
   bool finished; // 已读完
   bool pinned;
-  String tags; // 逗号分隔的自定义标签
+  // 标签真实存储（逗号分隔）。tags 以 getter/setter 暴露：外部 `b.tags = ...`
+  // 赋值时同步重建 _tagListCache，tagList 读取不再反复 split（setTags 走 setter）
+  String _tags;
+  List<String> _tagListCache;
   int chapterCount;
   int wordCount;
   final bool imported; // true = 应用内私有副本，false = 原位置引用
@@ -42,7 +45,7 @@ class Book {
     this.percent = 0,
     this.finished = false,
     this.pinned = false,
-    this.tags = '',
+    String tags = '',
     this.chapterCount = 0,
     this.wordCount = 0,
     this.imported = false,
@@ -51,7 +54,8 @@ class Book {
     this.isOnline = false,
     this.sourceId = '',
     this.bookUrl = '',
-  });
+  })  : _tags = tags,
+        _tagListCache = _splitTags(tags);
 
   /// 在线书在数据库中的唯一路径（books.path 要求 UNIQUE 且 NOT NULL）。
   /// sourceId 是完整 URL（含协议），天然与 bookUrl 形成分隔；不引入额外
@@ -59,9 +63,22 @@ class Book {
   static String onlinePath(String sourceId, String bookUrl) =>
       'online://$sourceId$bookUrl';
 
-  /// 标签列表。
-  List<String> get tagList =>
-      tags.isEmpty ? const [] : tags.split(',').where((t) => t.isNotEmpty).toList();
+  /// 标签原始串（逗号分隔）；赋值时同步重建 tagList 缓存，
+  /// 外部 `b.tags = ...` 的赋值语法不受 getter/setter 影响。
+  String get tags => _tags;
+
+  set tags(String v) {
+    _tags = v;
+    _tagListCache = _splitTags(v);
+  }
+
+  /// 拆分标签串；返回不可变列表，避免缓存被调用方误改。
+  static List<String> _splitTags(String v) => v.isEmpty
+      ? const []
+      : List.unmodifiable(v.split(',').where((t) => t.isNotEmpty));
+
+  /// 标签列表（tags 变化时已重建，避免书架滚动反复 split）。
+  List<String> get tagList => _tagListCache;
 
   bool get unread => lastReadAt == 0 && percent == 0;
 

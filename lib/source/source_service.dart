@@ -34,6 +34,32 @@ class SourceBook {
 
   /// 用于搜索结果聚合的分组键（同名同作者视为同一本书）。
   String get groupKey => '${name.trim()}|${author.trim()}';
+
+  /// 隔离线程传参用：全字符串扁平映射（compute 入参必须全为基础类型）。
+  Map<String, String> toJobMap() => {
+        'sourceId': sourceId,
+        'sourceName': sourceName,
+        'name': name,
+        'author': author,
+        'bookUrl': bookUrl,
+        'coverUrl': coverUrl,
+        'intro': intro,
+        'kind': kind,
+        'lastChapter': lastChapter,
+      };
+
+  /// [toJobMap] 的逆运算：在隔离线程里重建 hint。
+  static SourceBook fromJobMap(Map<String, String> m) => SourceBook(
+        sourceId: m['sourceId'] ?? '',
+        sourceName: m['sourceName'] ?? '',
+        name: m['name'] ?? '',
+        author: m['author'] ?? '',
+        bookUrl: m['bookUrl'] ?? '',
+        coverUrl: m['coverUrl'] ?? '',
+        intro: m['intro'] ?? '',
+        kind: m['kind'] ?? '',
+        lastChapter: m['lastChapter'] ?? '',
+      );
 }
 
 /// 在线章节。
@@ -82,6 +108,22 @@ Future<String> loadContentInIsolate(Map<String, String> job) async {
       decoded is Map<String, dynamic> ? BookSource.fromLegadoJson(decoded) : null;
   if (source == null) throw const SourceException('书源数据损坏');
   return await SourceService.loadContent(source, url);
+}
+
+/// 在隔离线程中执行书籍详情获取（网络+解析）。
+///
+/// 与 [loadContentInIsolate] 同理：书源规则的正则可能灾难性回溯，必须
+/// 隔离出 UI 线程执行。顶层函数才能被 compute 派发（不能是闭包或实例方法）。
+/// compute 入参必须全为基础类型：raw 为书源原始 JSON 串，hint 为
+/// [SourceBook.toJobMap] 产出的扁平字符串映射。
+Future<OnlineBookInfo> _bookInfoJob(Map<String, Object?> job) async {
+  final raw = job['raw'] as String;
+  final decoded = jsonDecode(raw);
+  final source =
+      decoded is Map<String, dynamic> ? BookSource.fromLegadoJson(decoded) : null;
+  if (source == null) throw const SourceException('书源数据损坏');
+  final hint = SourceBook.fromJobMap((job['hint'] as Map).cast<String, String>());
+  return SourceService.bookInfoCore(source, hint);
 }
 
 /// 书源服务：搜索、详情、目录、正文。
@@ -239,7 +281,16 @@ class SourceService {
   // ---------- 详情与目录 ----------
 
   /// 获取详情并返回目录入口。详情规则缺失/失败时直接用搜索结果回填。
-  static Future<OnlineBookInfo> bookInfo(BookSource s, SourceBook hint) async {
+  static Future<OnlineBookInfo> bookInfo(BookSource s, SourceBook hint) =>
+      bookInfoCore(s, hint);
+
+  /// 隔离线程执行详情获取：书源正则可能灾难性回溯，不能跑 UI 线程。
+  /// 结果与 [bookInfo] 完全一致（返回对象全为基础类型字段，可跨 isolate 传回）。
+  static Future<OnlineBookInfo> bookInfoIsolated(BookSource s, SourceBook hint) =>
+      compute(_bookInfoJob, {'raw': s.rawJson, 'hint': hint.toJobMap()});
+
+  /// [bookInfo] 的「网络+解析」主体，供隔离线程（[_bookInfoJob]）复用。
+  static Future<OnlineBookInfo> bookInfoCore(BookSource s, SourceBook hint) async {
     var name = hint.name;
     var author = hint.author;
     var intro = hint.intro;

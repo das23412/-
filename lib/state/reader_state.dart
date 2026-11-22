@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -48,8 +49,17 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
 
   bool get isOnlineBook => book.isOnline;
 
+  /// 在途章节加载任务（按章去重：同一章并发请求复用同一个 Future）。
+  final Map<int, Future<void>> _inflight = {};
+
+  /// 在途任务中由前台触发的章（chapterLoading 的"前台"标记）。
+  final Set<int> _inflightForeground = {};
+
   /// 当前章正文是否正在联网加载（仅在线书前台加载时为 true）。
-  bool chapterLoading = false;
+  /// 派生自在途任务表，不再单独维护布尔字段。
+  bool get chapterLoading =>
+      _inflight.containsKey(currentChapter) &&
+      _inflightForeground.contains(currentChapter);
 
   /// 在线书各章的正文地址（与 chapters 下标对应）。
   List<String> _chapterUrls = [];
@@ -136,7 +146,7 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     // 目录：优先缓存
     var toc = await _db.loadToc(book.id!);
     if (toc.isEmpty) {
-      final info = await SourceService.bookInfo(
+      final info = await SourceService.bookInfoIsolated(
           source,
           SourceBook(
             sourceId: book.sourceId,
@@ -168,39 +178,58 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 确保某章正文已加载（在线书）：缓存 → 网络。
   /// 失败时写入内存占位文本（不入缓存），下次进入该章自动重试。
+  /// 去重：同一章已有在途加载时直接返回该 Future；前台请求会把在途任务
+  /// 升级为前台，让 UI 显示加载状态。
   Future<void> _ensureChapterLoaded(int idx, {bool foreground = false}) async {
     if (idx < 0 || idx >= chapters.length) return;
-    final cur = chapters[idx].text;
-    if (cur.isNotEmpty && !cur.startsWith(_failedPrefix)) return;
-    final cached = await _db.loadContent(book.id!, idx, url: _chapterUrls[idx]);
-    if (cached != null && cached.isNotEmpty) {
-      _applyChapterText(idx, cached);
-      return;
-    }
-    final source = _source;
-    if (source == null) {
-      _applyChapterText(idx, '$_failedPrefix 书源不存在或已删除');
-      return;
-    }
-    if (foreground) {
-      chapterLoading = true;
-      _safeNotify();
-    }
-    try {
-      // 正文抓取+解析+净化全部在隔离线程执行：书源畸形正则不再冻结 UI
-      // 恶意书源正则可能让 isolate 永久挂起：超时后本章标记失败可重试
-      final text = await compute(loadContentInIsolate, {
-        'raw': source.rawJson,
-        'url': _chapterUrls[idx],
-      }).timeout(const Duration(minutes: 1));
-      _applyChapterText(idx, text);
-      await _db.saveContent(book.id!, idx, text, url: _chapterUrls[idx]);
-    } catch (e) {
-      _applyChapterText(idx, '$_failedPrefix ${e.toString()}');
-    } finally {
-      if (foreground) {
-        chapterLoading = false;
+    final existing = _inflight[idx];
+    if (existing != null) {
+      if (foreground && !_inflightForeground.contains(idx)) {
+        _inflightForeground.add(idx);
         _safeNotify();
+      }
+      return existing;
+    }
+    final task = _loadChapter(idx, foreground: foreground);
+    _inflight[idx] = task;
+    return task;
+  }
+
+  /// 单章实际加载：缓存 → 网络；无论成败都在 finally 清理在途标记。
+  Future<void> _loadChapter(int idx, {required bool foreground}) async {
+    try {
+      final cur = chapters[idx].text;
+      if (cur.isNotEmpty && !cur.startsWith(_failedPrefix)) return;
+      final cached =
+          await _db.loadContent(book.id!, idx, url: _chapterUrls[idx]);
+      if (cached != null && cached.isNotEmpty) {
+        _applyChapterText(idx, cached);
+        return;
+      }
+      final source = _source;
+      if (source == null) {
+        _applyChapterText(idx, '$_failedPrefix 书源不存在或已删除');
+        return;
+      }
+      if (foreground && _inflightForeground.add(idx)) {
+        _safeNotify(); // 当前章开始联网加载：UI 显示进度
+      }
+      try {
+        // 正文抓取+解析+净化全部在隔离线程执行：书源畸形正则不再冻结 UI
+        // 恶意书源正则可能让 isolate 永久挂起：超时后本章标记失败可重试
+        final text = await compute(loadContentInIsolate, {
+          'raw': source.rawJson,
+          'url': _chapterUrls[idx],
+        }).timeout(const Duration(minutes: 1));
+        _applyChapterText(idx, text);
+        await _db.saveContent(book.id!, idx, text, url: _chapterUrls[idx]);
+      } catch (e) {
+        _applyChapterText(idx, '$_failedPrefix ${e.toString()}');
+      }
+    } finally {
+      _inflight.remove(idx);
+      if (_inflightForeground.remove(idx)) {
+        _safeNotify(); // 加载结束：撤销加载指示
       }
     }
   }
@@ -230,6 +259,8 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
         chapters[i] = ParsedChapter(chapters[i].title, '');
       }
     }
+    // 正文卸载的同时清掉远章的排版缓存，避免旧分页结果继续占内存
+    _layouts.removeWhere((k, _) => (k - center).abs() > keep);
   }
 
   void _recomputeOffsets() {
@@ -316,6 +347,13 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     currentChapter = idx.clamp(0, chapters.length - 1).toInt();
     currentPage = 0;
     charOffsetInChapter = charOffset;
+    // 跳章同样要落进度（字段口径与 onPageChanged/saveNow 一致）：
+    // 否则从目录跳章后直接退出，进度仍停留在跳转前的章节
+    book
+      ..chapterIndex = currentChapter
+      ..charOffset = charOffsetInChapter
+      ..percent = percent;
+    _saveDebounced();
     if (book.isOnline) {
       // 正文按需加载：加载完成后 notify 界面重排（前台加载显示进度）
       _ensureChapterLoaded(currentChapter, foreground: true);
@@ -356,12 +394,21 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   bool _savePending = false;
+  Timer? _saveTimer;
+
+  /// 节流落盘：2 秒内的连续改动合并为一次写库。
+  /// 用可取消的 Timer 而非 Future.delayed，dispose 时能撤掉未触发的保存。
   void _saveDebounced() {
     if (_savePending) return;
     _savePending = true;
-    Future.delayed(const Duration(seconds: 2), () async {
-      _savePending = false;
-      await saveNow();
+    _saveTimer = Timer(const Duration(seconds: 2), () async {
+      try {
+        await saveNow();
+      } catch (_) {
+        // 定时落盘失败不冒泡成未捕获异常；下次翻页/退后台/退出会再试
+      } finally {
+        _savePending = false; // 写库结束（含失败）后再复位
+      }
     });
   }
 
@@ -384,7 +431,7 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
   bool searching = false;
   String? searchError;
 
-  /// 全书关键词搜索（隔离线程执行，逐章定位所有命中）。
+  /// 全书关键词搜索（隔离线程分批执行，逐章定位所有命中）。
   Future<void> searchBook(String query) async {
     final q = query.trim();
     if (q.isEmpty) return;
@@ -394,10 +441,30 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     searchResults = [];
     _safeNotify();
     try {
-      final hits = await compute(_searchBookJob, {
-        'texts': chapters.map((c) => c.text).toList(),
-        'query': q,
-      });
+      // 分批把章节文本送进搜索 isolate，避免整书一次性拷贝；批内每章
+      // 带上章下标，合并命中时仍是全局 (章顺序, 章内位置) 排列
+      const batch = 100;
+      final hits = <({int chapter, int offset, String preview})>[];
+      for (int start = 0;
+          start < chapters.length && hits.length < 500;
+          start += batch) {
+        final end = (start + batch).clamp(0, chapters.length);
+        final part = <({int idx, String text})>[
+          for (int i = start; i < end; i++) (idx: i, text: chapters[i].text),
+        ];
+        final found = await compute(_searchBatchJob, {
+          'chapters': part,
+          'query': q,
+          'limit': 500 - hits.length,
+        });
+        for (final (idx, offset) in found) {
+          final text = chapters[idx].text;
+          final s = (offset - 20).clamp(0, text.length);
+          final e = (offset + q.length + 20).clamp(0, text.length);
+          hits.add(
+              (chapter: idx, offset: offset, preview: text.substring(s, e)));
+        }
+      }
       searchResults = hits;
     } catch (e) {
       searchError = '搜索失败：$e';
@@ -445,7 +512,7 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
-      saveNow();
+      unawaited(saveNow().catchError((_) {})); // 不能 await：失败不抛未捕获异常
     }
   }
 
@@ -458,28 +525,29 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
-    saveNow();
+    _saveTimer?.cancel(); // 撤掉未触发的节流保存，改为立即落盘
+    unawaited(saveNow().catchError((_) {})); // dispose 不能 await：失败不抛未捕获异常
     super.dispose();
   }
 }
 
-/// 全书关键词搜索（隔离线程执行）：逐章定位所有命中并生成上下文预览。
-List<({int chapter, int offset, String preview})> _searchBookJob(
-    Map<String, Object?> job) {
-  final texts = job['texts'] as List<String>;
+/// 单批章节搜索（隔离线程执行）：逐章定位命中，返回 (章下标, 章内偏移) 列表。
+/// 只接收本批文本，避免整书一次性拷贝进 isolate；预览由主 isolate 依偏移截取。
+List<(int, int)> _searchBatchJob(Map<String, Object?> job) {
+  final chapters = job['chapters'] as List<({int idx, String text})>;
   final query = job['query'] as String;
-  final hits = <({int chapter, int offset, String preview})>[];
-  for (int i = 0; i < texts.length && hits.length < 500; i++) {
-    final text = texts[i];
+  final limit = job['limit'] as int;
+  final found = <(int, int)>[];
+  for (final c in chapters) {
+    if (found.length >= limit) break;
+    final text = c.text;
     var pos = text.indexOf(query);
     var inChapter = 0;
-    while (pos >= 0 && inChapter < 50 && hits.length < 500) {
-      final start = (pos - 20).clamp(0, text.length);
-      final end = (pos + query.length + 20).clamp(0, text.length);
-      hits.add((chapter: i, offset: pos, preview: text.substring(start, end)));
+    while (pos >= 0 && inChapter < 50 && found.length < limit) {
+      found.add((c.idx, pos));
       pos = text.indexOf(query, pos + query.length);
       inChapter++;
     }
   }
-  return hits;
+  return found;
 }

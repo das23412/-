@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../data/book.dart';
 import '../state/library_state.dart';
@@ -171,12 +172,17 @@ class _BookDetailSheetState extends State<BookDetailSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final b = widget.book;
+    // 监听书架状态：重命名/置顶/标签变化后自动重建，并按 id 取最新 Book
+    // 渲染（找不到——如刚被删除——退回 widget.book 兜底）。
+    final lib = context.watch<LibraryState>();
+    final int? bookId = widget.book.id;
+    final Book b = bookId == null
+        ? widget.book
+        : lib.books.firstWhere((e) => e.id == bookId,
+            orElse: () => widget.book);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: ListBody(
         children: [
           Row(
             children: [
@@ -224,7 +230,8 @@ class _BookDetailSheetState extends State<BookDetailSheet> {
               _action(Icons.edit_outlined, '重命名', _rename),
               _action(Icons.label_outline, '标签', _editTags),
               _action(Icons.push_pin_outlined, b.pinned ? '取消置顶' : '置顶',
-                  () => widget.library.togglePin(b)),
+                  // 与其他动作一致走 _guard：防重入 + 存储异常兜底提示
+                  () => _guard(() => widget.library.togglePin(b))),
               _action(Icons.delete_outline, '删除', _delete, danger: true),
             ],
           ),

@@ -18,6 +18,11 @@ class ChapterLayout {
   final int linesPerPage;
   final List<int> pageBreaks; // 每页起始行号（含最后一页结束哨兵）
 
+  /// 章节原始字符数（= 各段原始长度之和 + 段间换行数）。末段后没有换行符，
+  /// 不再多加 1，也不含首行缩进前缀；由 layout() 直接传入，避免从带缩进的
+  /// paragraphTexts 反推出现 off-by-one。
+  final int chapterChars;
+
   ChapterLayout({
     required this.lines,
     required this.paragraphs,
@@ -25,6 +30,7 @@ class ChapterLayout {
     required this.lineHeight,
     required this.linesPerPage,
     required this.pageBreaks,
+    required this.chapterChars,
   });
 
   int get pageCount => pageBreaks.length - 1;
@@ -67,10 +73,10 @@ class ChapterLayout {
     return ans;
   }
 
-  int get _totalChars {
-    if (paragraphTexts.isEmpty) return 0;
-    return paragraphs.last + paragraphTexts.last.length;
-  }
+  /// 行号越过末行时的字符偏移 = 章节原始长度（layout() 精确传入）。
+  /// 旧实现按 paragraphs.last + paragraphTexts.last.length 反推：末段显示
+  /// 文本带两格缩进前缀时会多算 2 个字符（off-by-one 变体）。
+  int get _totalChars => chapterChars;
 
   /// 取一页的展示文本（按段落切片重组）。
   String pageText(int page) {
@@ -100,10 +106,14 @@ class Paginator {
   /// 返回段落内 [start, end) 区间列表。短段落原样返回单块。
   static const int _maxSegmentLength = 8000;
 
+  /// 分块断点候选标点：静态编译一次，避免每次调用 _segments 都重建 RegExp。
+  static final RegExp _segmentPunctuation =
+      RegExp(r'[。！？!?；;…」』”’），,)]');
+
   static List<(int, int)> _segments(String text) {
     if (text.length <= _maxSegmentLength) return [(0, text.length)];
     final segs = <(int, int)>[];
-    final punctuation = RegExp(r'[。！？!?；;…」』”’），,)]');
+    final punctuation = _segmentPunctuation;
     int start = 0;
     while (text.length - start > _maxSegmentLength) {
       // 在 [start+3/4上限, start+上限] 窗口内找最后一个标点
@@ -148,7 +158,10 @@ class Paginator {
     for (final p in paragraphs) {
       paragraphOffsets.add(offset);
       paragraphTexts.add(indent && p.isNotEmpty ? '\u3000\u3000$p' : p);
-      offset += p.length + 1; // +1 对应换行符
+      // +1 对应换行符；末段后的这个 +1 是虚构的（原文无结尾换行），但
+      // 段落起始偏移都在自增前记录、局部 offset 循环后不再使用，不受影响。
+      // 章节总长以 chapterChars 为准。
+      offset += p.length + 1;
     }
 
     final tp = TextPainter(
@@ -203,6 +216,7 @@ class Paginator {
       lineHeight: lineHeight,
       linesPerPage: linesPerPage,
       pageBreaks: pageBreaks,
+      chapterChars: chapterText.length,
     );
   }
 }

@@ -5,7 +5,6 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
-import 'data/db.dart';
 import 'data/settings.dart';
 import 'platform/intent_channel.dart';
 import 'state/library_state.dart';
@@ -91,6 +90,9 @@ class GatePage extends StatefulWidget {
 class _GatePageState extends State<GatePage> {
   bool _booted = false;
 
+  /// 会话级去重：同一路径只导入一次（冷启动 drain 与运行中 push 可能重叠）。
+  final Set<String> _handledIntentPaths = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -101,20 +103,28 @@ class _GatePageState extends State<GatePage> {
     if (_booted) return;
     _booted = true;
 
-    // 1. 其他 App 传来的文件（无需存储权限，原生层已拷贝到应用缓存）
-    final intentPath = await IntentChannel.initialFilePath();
+    // 1. 其他 App 传来的文件（无需存储权限，原生层已拷贝到应用缓存）。
+    //    先注册运行时监听、再取冷启动积压队列：两条路谁先到都能接住，
+    //    同一路径两路都送达时由 _handledIntentPaths 去重。
     IntentChannel.onNewFilePath((path) async {
+      await _handleIntentPath(path);
+      // 运行中每收一个文件刷一次书架（冷启动批量在下面整批只刷一次）
       final ctx = navigatorKey.currentContext;
-      if (ctx == null) return;
-      final libState = ctx.read<LibraryState>();
-      await libState.importFromIntent(path);
-      await _openImported(path);
+      if (ctx != null && ctx.mounted) {
+        await ctx.read<LibraryState>().reload();
+      }
     });
 
+    final initialPaths = await IntentChannel.initialFilePaths();
+
     // 1.5 启动即带文件打开：优先于权限弹窗/首扫确认，避免打断用户的直接意图
-    if (intentPath != null && mounted) {
-      await context.read<LibraryState>().reload();
-      await _openImported(intentPath);
+    if (initialPaths.isNotEmpty && mounted) {
+      final libState = context.read<LibraryState>();
+      for (final path in initialPaths) {
+        await _handleIntentPath(path);
+      }
+      // 整批导入完成只刷一次书架：25 个文件不再触发 25 次全量查库+重建
+      await libState.reload();
     }
 
     // 2. 存储权限（仅用于全盘扫描；拒绝也不影响手动导入）
@@ -161,10 +171,19 @@ class _GatePageState extends State<GatePage> {
     }
   }
 
-  Future<void> _openImported(String path) async {
-    final book = await AppDb.instance.bookByPath(path);
+  /// 处理一条“用墨阅打开/分享”的路径：去重 → 导入 → 自动打开。
+  /// 打开直接用 importFromIntent 返回的 Book：入库登记的是拷贝到私有目录
+  /// 后的路径，拿缓存路径查库永远查不到（自动打开失效的历史原因）。
+  Future<void> _handleIntentPath(String path) async {
+    if (!_handledIntentPaths.add(path)) return; // 本会话已处理过
     final ctx = navigatorKey.currentContext;
-    if (book == null || ctx == null || !ctx.mounted) return;
+    if (ctx == null || !ctx.mounted) {
+      // 界面尚未就绪：从去重集合移除，允许下次推送重试
+      _handledIntentPaths.remove(path);
+      return;
+    }
+    final book = await ctx.read<LibraryState>().importFromIntent(path);
+    if (book == null || !ctx.mounted) return;
     Navigator.of(ctx).push(
       MaterialPageRoute(builder: (_) => ReaderPage(book: book)),
     );

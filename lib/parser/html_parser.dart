@@ -10,8 +10,11 @@ class HtmlParser {
   static ParsedBook parse(File file) {
     final bytes = file.readAsBytesSync();
     var html = CharsetDecoder.decode(bytes);
-    // 若 <meta charset="gbk"> 等声明与 UTF-8 解码结果冲突，简单启发：出现大量替换符则按 GBK 重解
-    if (html.contains('\uFFFD\uFFFD')) {
+    // 解码结果存在任一替换符，且文件头能探测到声明的 charset（如
+    // gbk/gb2312）时，按声明编码重解：旧条件要求连续两个 FFFD，
+    // UTF-8 严格解码下单个中文双字节损坏只产生一个替换符，声明了
+    // GBK 的文件会因不够"连续两个"而错过重解机会
+    if (html.contains('\uFFFD')) {
       final retry = _decodeWithDeclaredCharset(bytes);
       if (retry != null) html = retry;
     }
@@ -53,6 +56,9 @@ class HtmlParser {
       text: text,
       bookTitle: title,
       titlePatterns: [_chapterMark],
+      // 与 TXT/MOBI 主路径一致：开目录守卫与目录块折叠
+      excludeTocLines: true,
+      collapseTocRuns: true,
     );
     if (parts.isEmpty) {
       return [ParsedChapter(title.isEmpty ? '正文' : title, text)];

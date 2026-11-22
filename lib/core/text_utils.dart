@@ -5,6 +5,15 @@ class TextUtils {
   /// 移除 script/style/title，块级标签转换为换行，解引用常见 HTML 实体。
   static String stripHtml(String html) {
     var s = html;
+    // head/title/script/style 未闭合时，下方"整段移除"的正则 .*?</标签>
+    // 找不到终止点会一路吞到串尾，把后面全部正文当头部内容丢掉。
+    // 先按 <body> 切一刀只保留 body 部分（未闭合头部随之剥离）；
+    // 没有 body 标签的片段维持原样走既有流程。
+    final bodyStart =
+        RegExp(r'<body[^>]*>', caseSensitive: false).firstMatch(s);
+    if (bodyStart != null) {
+      s = s.substring(bodyStart.end);
+    }
     // 去掉注释
     s = s.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
     // script / style / title 整段移除

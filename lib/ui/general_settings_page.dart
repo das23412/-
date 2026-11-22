@@ -18,6 +18,7 @@ enum _UpdateState { idle, checking, none, available, downloading, done }
 
 class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
   final _progressThrottler = ProgressThrottler();
+  bool _busy = false; // 检查更新/下载更新进行中：防重入
   _UpdateState _updateState = _UpdateState.idle;
   UpdateInfo? _update;
   String? _error;
@@ -31,12 +32,15 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
   }
 
   Future<void> _checkUpdate() async {
+    if (_busy) return;
+    _busy = true;
     setState(() {
       _updateState = _UpdateState.checking;
       _error = null;
     });
     try {
       final info = await UpdateService.checkLatest(AppInfo.version);
+      if (!mounted) return; // await 后再 setState 前先确认页面还在
       setState(() {
         if (info == null) {
           _updateState = _UpdateState.none;
@@ -46,21 +50,26 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
         }
       });
     } on UpdateException catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.message;
         _updateState = _UpdateState.idle;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = '检查失败：$e';
         _updateState = _UpdateState.idle;
       });
+    } finally {
+      _busy = false;
     }
   }
 
   Future<void> _downloadUpdate() async {
     final info = _update;
-    if (info == null) return;
+    if (info == null || _busy) return;
+    _busy = true;
     setState(() {
       _updateState = _UpdateState.downloading;
       _received = 0;
@@ -82,20 +91,30 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
         },
         expectedSha256: info.sha256,
       );
+      if (!mounted) return; // await 后再 setState 前先确认页面还在
       setState(() {
         _apkPath = path;
         _updateState = _UpdateState.done;
       });
+      if (info.sha256.isEmpty) {
+        // 发布资产缺 digest：本次下载未能做 sha256 校验，明确提示而不是让用户误以为已校验
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('下载完成（未能校验安装包）')));
+      }
     } on UpdateException catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.message;
         _updateState = _UpdateState.available;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = '下载失败：$e';
         _updateState = _UpdateState.available;
       });
+    } finally {
+      _busy = false;
     }
   }
 

@@ -75,6 +75,9 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   ScrollController? _tocListController;
   ScrollController? _bookmarkListController;
 
+  // 搜索弹层输入框：字段复用（每次打开先清空），dispose 时释放
+  final TextEditingController _searchSheetCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -97,6 +100,15 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 页内文字边距只在系统栏高度变化（旋转/分屏）时更新；旧实现在
+    // build 里每帧赋值，白造 EdgeInsets 实例。公式与旧实现一致。
+    _pagePad = EdgeInsets.fromLTRB(
+        18, MediaQuery.of(context).padding.top + 36, 18, 28);
+  }
+
+  @override
   void dispose() {
     // rs.dispose() 内部会 saveNow，这里不必重复保存
     rs.dispose();
@@ -106,6 +118,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     _panelCtrl.dispose();
     _tocListController?.dispose();
     _bookmarkListController?.dispose();
+    _searchSheetCtrl.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -330,7 +343,10 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _sidePanelOpen) _closeSidePanel();
       },
-      child: Scaffold(
+      // 阅读页整体（含菜单/面板）关掉系统字体缩放：分页按 cfg.fontSize 固定
+      // 假设排版，系统缩放会让渲染字号偏离排版结果，出现溢出/错页。
+      child: MediaQuery.withNoTextScaling(
+        child: Scaffold(
       body: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         color: palette.background,
@@ -359,6 +375,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
         ),
       ),        // AnimatedContainer
       ),        // Scaffold
+      ),        // MediaQuery.withNoTextScaling
     );          // PopScope 闭 + return 分号
   }
 
@@ -403,8 +420,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   Widget _content(
       BuildContext ctx, BoxConstraints box, ReaderConfig cfg, ReaderPalette palette) {
     // 页面全屏铺满（翻页效果覆盖整屏），文字边距画在页面内部
-    _pagePad = EdgeInsets.fromLTRB(
-        18, MediaQuery.of(ctx).padding.top + 36, 18, 28);
+    // （_pagePad 在 didChangeDependencies 中按系统栏高度更新）
     // 翻页方式切换：重建各翻页控制器，并把落点重定位到当前进度
     if (_lastPageMode != cfg.settings.pageMode) {
       _lastPageMode = cfg.settings.pageMode;
@@ -752,6 +768,9 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   /// 覆盖揭页（pageMode == 2）：当前页作为上层跟手滑出，
   /// 下层固定显示被露出的页面，滑出前缘带阴影。
   /// _coverOffset ∈ [-1, 1]：负=向左滑出（露出下一页），正=向右滑回（盖住上一页）。
+  ///
+  /// 页面内容只在整页重建时构造；AnimatedBuilder(animation: _coverCtrl)
+  /// 内只有 Transform/阴影层随帧响应 _coverOffset，动画帧不再整页 setState。
   Widget _coverRevealBody(
       BoxConstraints box, ChapterLayout layout, ReaderPalette palette, ReaderConfig cfg) {
     final w = box.maxWidth;
@@ -774,59 +793,74 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
       );
     }
 
-    // 上层：当前页（跟手平移）
-    final over = Transform.translate(
-      offset: Offset(_coverOffset * w, 0),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          pageContent(_coverIndex),
-          // 滑出前缘阴影：向左滑出时阴影在右缘，向右时在左缘
-          if (_coverOffset.abs() > 0.01)
-            Positioned(
-              top: 0,
-              bottom: 0,
-              left: _coverOffset > 0 ? 0 : null,
-              right: _coverOffset < 0 ? 0 : null,
-              width: 26,
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: _coverOffset > 0
-                          ? Alignment.centerLeft
-                          : Alignment.centerRight,
-                      end: _coverOffset > 0
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withValues(
-                            alpha: 0.28 * _coverOffset.abs()),
-                      ],
+    // 预置三个页面内容（上层当前页 + 下层拖动/补间可能露出的两页候选）：
+    // pageText 切片与装饰只在整页重建时计算，动画/拖动帧只重跑下方
+    // builder，把偏移应用到 Transform 与阴影，页面文本以既有实例复用。
+    final overPage = pageContent(_coverIndex);
+    final Widget? underPrev =
+        _coverIndex - 1 >= 0 ? pageContent(_coverIndex - 1) : null;
+    final Widget? underNext = _coverIndex + 1 < _windowTotal
+        ? pageContent(_coverIndex + 1)
+        : null;
+
+    return AnimatedBuilder(
+      animation: _coverCtrl,
+      builder: (ctx, _) {
+        final off = _coverOffset;
+        // 下层：被露出的页面（offset 负=右侧下一页；正=左侧上一页），
+        // 补间中段跨越 0 点时也能换到另一侧的候选页。
+        final Widget? under = off < -0.001
+            ? underNext
+            : off > 0.001
+                ? underPrev
+                : null;
+
+        // 上层：当前页（跟手平移）
+        final over = Transform.translate(
+          offset: Offset(off * w, 0),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              overPage,
+              // 滑出前缘阴影：向左滑出时阴影在右缘，向右时在左缘
+              if (off.abs() > 0.01)
+                Positioned(
+                  top: 0,
+                  bottom: 0,
+                  left: off > 0 ? 0 : null,
+                  right: off < 0 ? 0 : null,
+                  width: 26,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: off > 0
+                              ? Alignment.centerLeft
+                              : Alignment.centerRight,
+                          end: off > 0
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.28 * off.abs()),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-        ],
-      ),
-    );
+            ],
+          ),
+        );
 
-    // 下层：被露出的页面（offset 负=右侧下一页；正=左侧上一页）
-    final underIdx = _coverOffset < -0.001
-        ? _coverIndex + 1
-        : _coverOffset > 0.001
-            ? _coverIndex - 1
-            : -1;
-    final underValid = underIdx >= 0 && underIdx < _windowTotal;
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (underValid) Positioned.fill(child: pageContent(underIdx)),
-        Positioned.fill(child: over),
-      ],
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            if (under != null) Positioned.fill(child: under),
+            Positioned.fill(child: over),
+          ],
+        );
+      },
     );
   }
 
@@ -895,9 +929,10 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   }
 
   void _onCoverTick() {
-    setState(() {
-      _coverOffset = _coverFrom + (_coverTo - _coverFrom) * _coverCtrl.value;
-    });
+    // 动画帧只更新滑出量、不整页 setState：Transform/阴影层由
+    // _coverRevealBody 里的 AnimatedBuilder 随控制器重绘，页面文本以
+    // 既有 widget 实例复用，不随帧重建。
+    _coverOffset = _coverFrom + (_coverTo - _coverFrom) * _coverCtrl.value;
   }
 
   void _onCoverStatus(AnimationStatus status) {
@@ -1047,12 +1082,26 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     return '第$chapter1based章 $short（${pct.toStringAsFixed(0)}%）';
   }
 
-  /// 拖动进度条时的实时章节提示。
-  String _chapterLabelFor(int charOffset) {    if (rs.chapterStartChars.isEmpty || rs.totalChars == 0) return '';
-    int idx = 0;
-    for (int i = 0; i < rs.chapterStartChars.length; i++) {
-      if (rs.chapterStartChars[i] <= charOffset) idx = i;
+  /// 全书字符偏移 → 章号（chapterStartChars 升序，二分找最后一个 ≤ 偏移的章）。
+  int _chapterIndexForOffset(int charOffset) {
+    final starts = rs.chapterStartChars;
+    int lo = 0, hi = starts.length - 1, ans = 0;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      if (starts[mid] <= charOffset) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
+    return ans;
+  }
+
+  /// 拖动进度条时的实时章节提示。
+  String _chapterLabelFor(int charOffset) {
+    if (rs.chapterStartChars.isEmpty || rs.totalChars == 0) return '';
+    final idx = _chapterIndexForOffset(charOffset);
     final title = rs.chapters[idx].title;
     final short = title.length > 10 ? '${title.substring(0, 10)}…' : title;
     final pct = (charOffset / rs.totalChars * 100).clamp(0.0, 100.0)
@@ -1334,10 +1383,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   }
 
   void _jumpToGlobalOffset(int charOffset) {
-    int ch = 0;
-    for (int i = 0; i < rs.chapterStartChars.length; i++) {
-      if (rs.chapterStartChars[i] <= charOffset) ch = i;
-    }
+    final ch = _chapterIndexForOffset(charOffset);
     final inChapter = charOffset - rs.chapterStartChars[ch];
     _goChapter(ch, charOffset: inChapter);
   }
@@ -1537,7 +1583,8 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
   /// 全文搜索弹层：输入关键词 → 全书搜索 → 点击命中跳转。
   void _showSearchSheet() {
     _toggleMenu();
-    final controller = TextEditingController();
+    // 复用字段控制器：打开时先清空，与旧“每次新建空控制器”初始状态一致
+    final controller = _searchSheetCtrl..clear();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,

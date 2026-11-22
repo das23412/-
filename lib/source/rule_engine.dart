@@ -620,27 +620,37 @@ class RuleEngine {
       'nav', 'aside', 'main',
     };
     final buf = StringBuffer();
+    // buf 末字符缓存：buf.toString().endsWith('\n') 每次判断都整串拷贝一遍，
+    // 深层大文档下整体退化为 O(n²)；改为在唯一写入口 write 里维护末字符，
+    // 判断只看缓存值，行为与原来完全一致。
+    String? lastChar;
+    void write(String s) {
+      if (s.isEmpty) return;
+      buf.write(s);
+      lastChar = s[s.length - 1];
+    }
+
     void walk(Node n) {
       if (n is Text) {
-        buf.write(n.text);
+        write(n.text);
         return;
       }
       if (n is Element) {
         final tag = (n.localName ?? '').toLowerCase();
         if (tag == 'br') {
-          buf.write('\n');
+          write('\n');
           return;
         }
         if (tag == 'script' || tag == 'style') return;
         final isBlock = blockTags.contains(tag);
-        if (isBlock && buf.isNotEmpty && !buf.toString().endsWith('\n')) {
-          buf.write('\n');
+        if (isBlock && buf.isNotEmpty && lastChar != '\n') {
+          write('\n');
         }
         for (final child in n.nodes) {
           walk(child);
         }
-        if (isBlock && buf.isNotEmpty && !buf.toString().endsWith('\n')) {
-          buf.write('\n');
+        if (isBlock && buf.isNotEmpty && lastChar != '\n') {
+          write('\n');
         }
       }
     }

@@ -21,6 +21,23 @@ class IntentChannel {
     }
   }
 
+  /// 应用启动时携带的全部文件路径（批量“用墨阅打开”可能不止一个）。
+  /// 原生侧一次性返回并清空队列；运行中推送丢失的文件也留在队列里，
+  /// 由下次冷启动的这次调用兜底。
+  static Future<List<String>> initialFilePaths() async {
+    try {
+      final result =
+          await _channel.invokeMethod<List<Object?>>('initialFilePaths');
+      // 逐元素过滤而不是整表 cast：个别坏元素只丢弃，不让整批抛错
+      return result?.whereType<String>().toList() ?? const <String>[];
+    } on PlatformException {
+      return const <String>[];
+    } on MissingPluginException {
+      // 测试环境/宿主未注册渠道：静默降级
+      return const <String>[];
+    }
+  }
+
   /// 监听应用运行中新收到的打开请求。
   static void onNewFilePath(void Function(String path) callback) {
     _channel.setMethodCallHandler((call) async {

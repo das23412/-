@@ -37,6 +37,7 @@ class _LinkImportPageState extends State<LinkImportPage> {
 
   Future<void> _paste() async {
     final text = await Clipboard.getData('text/plain');
+    if (!mounted) return; // await 期间页面可能已销毁
     if (text?.text != null && text!.text!.trim().isNotEmpty) {
       _urlController.text = text.text!.trim();
       setState(() {});

@@ -27,8 +27,8 @@ class TxtParser {
     final t = line.trim();
     if (t.isEmpty || t.length > 50) return false;
     // 目录页特征：省略号/点导线 + 页码结尾，或多个空格 + 页码结尾
-    if (RegExp(r'[.…·•]{2,}\s*[0-9]{1,4}\s*$').hasMatch(t)) return false;
-    if (RegExp(r'\s{2,}[0-9]{1,4}\s*$').hasMatch(t)) return false;
+    //（守卫规则统一放在 ChapterSplitter，这里复用同一实现避免规则漂移）
+    if (ChapterSplitter.looksLikeTocLine(t)) return false;
     // 排除明显是正文的长句（含句号句尾的概率高）
     for (final p in chapterPatterns) {
       if (p.hasMatch(t)) return true;
@@ -54,6 +54,9 @@ class TxtParser {
       text: text,
       bookTitle: bookTitle,
       titlePatterns: chapterPatterns,
+      // 目录守卫在 marks 收集时生效（旧守卫只在这个无人调用的方法里，
+      // 主路径形同虚设），折叠阈值收紧为间隔 ≤1 行
+      excludeTocLines: true,
       collapseTocRuns: true,
       chunkFallback: true,
       bookTitleFallback: '正文',

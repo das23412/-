@@ -78,20 +78,28 @@ class _BookstorePageState extends State<BookstorePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  bool _opening = false; // 取详情+跳阅读页进行中：防重复点击双开
+
   /// 选中某个具体来源：加入书架并打开阅读。
   Future<void> _openSource(SourceBook sb) async {
-    final lib = context.read<LibraryState>();
-    _snack('正在获取书籍信息…');
-    final book = await lib.addOnlineBook(sb);
-    if (!mounted) return;
-    if (book == null) {
-      _snack('加入书架失败，请稍后重试');
-      return;
+    if (_opening) return;
+    _opening = true;
+    try {
+      final lib = context.read<LibraryState>();
+      _snack('正在获取书籍信息…');
+      final book = await lib.addOnlineBook(sb);
+      if (!mounted) return; // await 后、Navigator.push 前的 mounted 保护
+      if (book == null) {
+        _snack('加入书架失败，请稍后重试');
+        return;
+      }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ReaderPage(book: book)),
+      );
+    } finally {
+      _opening = false;
     }
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => ReaderPage(book: book)),
-    );
   }
 
   void _showSourcePicker(_AggregatedBook agg) {
@@ -268,11 +276,11 @@ class _AggregatedBook {
   final String author;
   final List<SourceBook> matches = [];
 
+  /// 只记录组名与作者；首本由调用方 putIfAbsent(...).matches.add(b) 统一加入，
+  /// 这里不再 add（否则每组第一本会被计数两次）。
   _AggregatedBook(SourceBook first)
       : name = first.name,
-        author = first.author {
-    matches.add(first);
-  }
+        author = first.author;
 
   String get intro {
     for (final m in matches) {
