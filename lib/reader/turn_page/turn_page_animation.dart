@@ -90,10 +90,10 @@ class _PageTurnClipper extends CustomClipper<Path> {
     required Animation<double> animation,
     required this.animationTransitionPoint,
     this.direction = TurnDirection.leftToRight,
-  })  : animation = animation,
-        // 进度重绘由 animation 直接驱动（每帧 markNeedsClip），
-        // shouldReclip 只在静态参数变化时介入。
-        super(repaint: animation);
+  })  : animation = animation;
+
+  // 逐帧重裁由 shouldReclip 的「上次裁剪值快照」驱动（见 _clippedAt）：
+  // AnimatedBuilder 每帧重建都会拿到新 clipper 实例，快照值不同即返回 true。
 
   /// The animation that controls the page-turning effect.
   final Animation<double> animation;
@@ -105,12 +105,20 @@ class _PageTurnClipper extends CustomClipper<Path> {
   /// The direction in which the pages are turned.
   final TurnDirection direction;
 
+  /// 上一次实际执行 getClip 时的动画进度快照：同一 Animation 对象被新旧
+  /// 实例共享，直接比 value 恒等会冻结翻页；快照在 getClip 时写入，
+  /// 旧实例的快照是上一帧的值，与新实例的当前值在动画中必然不同。
+  double? _clippedAt;
+
   /// Creates the clipping path based on the animation progress and direction.
   @override
   Path getClip(Size size) {
     final width = size.width;
     final height = size.height;
     final animationProgress = animation.value;
+
+    // 记录本次实际裁剪用的进度，供 shouldReclip 与旧实例比较
+    _clippedAt = animationProgress;
 
     final verticalVelocity = 1 / animationTransitionPoint;
 
@@ -188,9 +196,9 @@ class _PageTurnClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(_PageTurnClipper oldClipper) {
-    // 新旧委托持有同一个 Animation 实例，比较 animation.value 恒为 false，
-    // 会让翻页冻结；进度变化已由 repaint 监听驱动，这里只比较静态参数。
-    return oldClipper.animation != animation ||
+    // 快照值不同（任一帧进度推进）即重裁；静态参数变化也重裁。
+    return oldClipper._clippedAt != animation.value ||
+        oldClipper.animation != animation ||
         oldClipper.animationTransitionPoint != animationTransitionPoint ||
         oldClipper.direction != direction;
   }

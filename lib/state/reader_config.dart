@@ -119,7 +119,7 @@ class ReaderConfig extends ChangeNotifier {
     try {
       final root = p.normalize((await getApplicationDocumentsDirectory()).path);
       final target = p.normalize(path);
-      if (!target.startsWith('$root$p.separator')) return;
+      if (!target.startsWith('$root${p.separator}')) return;
       final f = File(target);
       if (f.existsSync()) f.deleteSync();
     } catch (_) {

@@ -32,6 +32,8 @@ class Book {
   final String sourceId; // 所属书源 id（bookSourceUrl）
   final String bookUrl; // 书籍详情页 URL
 
+  String encoding; // 手动指定的解析编码（''=自动，仅本地 TXT 生效）
+
   Book({
     this.id,
     required this.path,
@@ -54,6 +56,7 @@ class Book {
     this.isOnline = false,
     this.sourceId = '',
     this.bookUrl = '',
+    this.encoding = '',
   })  : _tags = tags,
         _tagListCache = _splitTags(tags);
 
@@ -104,6 +107,7 @@ class Book {
     bool? isOnline,
     String? sourceId,
     String? bookUrl,
+    String? encoding,
   }) {
     return Book(
       id: id ?? this.id,
@@ -127,6 +131,7 @@ class Book {
       isOnline: isOnline ?? this.isOnline,
       sourceId: sourceId ?? this.sourceId,
       bookUrl: bookUrl ?? this.bookUrl,
+      encoding: encoding ?? this.encoding,
     );
   }
 
@@ -152,6 +157,7 @@ class Book {
         'is_online': isOnline ? 1 : 0,
         'source_id': sourceId,
         'book_url': bookUrl,
+        'encoding': encoding,
       };
 
   static Book fromMap(Map<String, Object?> m) => Book(
@@ -179,6 +185,7 @@ class Book {
         isOnline: (m['is_online'] as int?) == 1,
         sourceId: (m['source_id'] as String?) ?? '',
         bookUrl: (m['book_url'] as String?) ?? '',
+        encoding: (m['encoding'] as String?) ?? '',
       );
 }
 

@@ -90,6 +90,25 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// 手动切换本地 TXT 书的解析编码并重解析；进度由既有恢复链路保留
+  /// （load 后 currentChapter 对齐 book.chapterIndex，页内偏移由
+  /// reader_page 的 restorePage 按 book.charOffset 恢复）。
+  Future<void> switchEncoding(String enc) async {
+    if (book.isOnline || book.format != BookFormat.txt) return;
+    if (book.encoding == enc) return;
+    book.encoding = enc;
+    if (book.id != null) await _db.updateBook(book);
+    await load();
+  }
+
+  /// 本地书解析 job（compute 目标须为顶层/静态函数）。
+  static Future<ParsedBook> _parseLocalBookJob(Map<String, Object?> args) async {
+    final path = args['path']! as String;
+    final enc = (args['encoding'] as String?) ?? '';
+    return BookParser.parseFile(path, BookFormat.fromPath(path),
+        encodingOverride: enc.isEmpty ? null : enc);
+  }
+
   Future<void> _loadLocalFile() async {
     final path = book.path;
     if (!File(path).existsSync()) {
@@ -100,9 +119,10 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     }
     ParsedBook parsed;
     try {
-      parsed = await compute(
-          (String p) => BookParser.parseFile(p, BookFormat.fromPath(p)),
-          path);
+      parsed = await compute(_parseLocalBookJob, {
+        'path': path,
+        'encoding': book.encoding,
+      });
     } catch (e) {
       throw Exception('解析失败：${e.toString()}');
     }

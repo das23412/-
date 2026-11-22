@@ -36,9 +36,12 @@ class TxtParser {
     return false;
   }
 
-  static ParsedBook parse(File file) {
+  static ParsedBook parse(File file, {String? encodingOverride}) {
     final raw = file.readAsBytesSync();
-    var text = CharsetDecoder.decode(raw);
+    // 手动指定编码（阅读设置里切换）时按指定编码强制解码；否则自动识别
+    var text = (encodingOverride == null || encodingOverride.isEmpty)
+        ? CharsetDecoder.decode(raw)
+        : CharsetDecoder.decodeAs(encodingOverride, raw);
     text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     // 去掉 UTF-16 场景可能残留的 BOM 字符
     if (text.isNotEmpty && text.codeUnitAt(0) == 0xFEFF) {

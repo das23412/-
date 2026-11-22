@@ -6,6 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../core/book_format.dart';
 import '../data/book.dart';
 import '../reader/paginate.dart';
 import '../reader/turn_page/turn_page_view.dart';
@@ -1678,6 +1679,52 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     );
   }
 
+  static String _encodingLabel(String enc) {
+    switch (enc) {
+      case '':
+        return '自动识别';
+      case 'utf-8':
+        return 'UTF-8';
+      case 'gbk':
+        return 'GBK / GB18030';
+      case 'utf-16':
+        return 'UTF-16';
+      default:
+        return enc;
+    }
+  }
+
+  /// 手动编码选择：选择后立即重解析，进度由 restorePage 自动恢复。
+  Future<void> _showEncodingPicker() async {
+    final current = rs.book.encoding;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('正文编码（本地 TXT）'),
+        children: [
+          for (final e in const {
+            '': '自动识别',
+            'utf-8': 'UTF-8',
+            'gbk': 'GBK / GB18030',
+            'utf-16': 'UTF-16',
+          }.entries)
+            RadioListTile<String>(
+              value: e.key,
+              groupValue: current,
+              title: Text(e.value),
+              onChanged: (v) => Navigator.pop(ctx, v),
+            ),
+        ],
+      ),
+    );
+    if (choice == null || choice == rs.book.encoding) return;
+    final label = _encodingLabel(choice);
+    await rs.switchEncoding(choice);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已按 $label 重新解析，进度已保留')));
+  }
+
   void _showSettings() {
     _toggleMenu();
     final cfg = context.read<ReaderConfig>();
@@ -1732,6 +1779,16 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                     ),
                   ],
                 ),
+                // 编码（仅本地 TXT 显示；EPUB/MOBI/HTML 自带编码声明）
+                if (rs.book.format == BookFormat.txt && !rs.book.isOnline)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text('编码'),
+                    subtitle: Text(_encodingLabel(rs.book.encoding)),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _showEncodingPicker,
+                  ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('段落首行缩进'),

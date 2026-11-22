@@ -57,6 +57,36 @@ class CharsetDecoder {
     }
   }
 
+  /// 按指定名字强制解码（阅读设置里的手动编码切换）。
+  /// 支持 utf-8 / gbk / utf-16le / utf-16be / utf-16（BOM 感知）；
+  /// 空或未知名字回落到自动识别 [decode]。
+  static String decodeAs(String name, List<int> bytes) {
+    final n = name.trim().toLowerCase();
+    if (n.isEmpty) return decode(bytes);
+    if (n == 'utf-8' || n == 'utf8') {
+      return utf8.decode(bytes, allowMalformed: true);
+    }
+    if (n == 'gbk' || n == 'gb2312' || n == 'gb18030') {
+      return decodeGbk(bytes);
+    }
+    if (n == 'utf-16le' || n == 'utf16le') {
+      return _decodeUtf16(bytes, littleEndian: true);
+    }
+    if (n == 'utf-16be' || n == 'utf16be') {
+      return _decodeUtf16(bytes, littleEndian: false);
+    }
+    if (n == 'utf-16' || n == 'utf16') {
+      if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        return _decodeUtf16(bytes.sublist(2), littleEndian: true);
+      }
+      if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+        return _decodeUtf16(bytes.sublist(2), littleEndian: false);
+      }
+      return _decodeUtf16(bytes, littleEndian: true);
+    }
+    return decode(bytes);
+  }
+
   /// windows-1252 高位区（0x80-0x9F）码表：27 个已定义码位 + 5 个未定义
   /// 位（0x81/0x8D/0x8F/0x90/0x9D，按 WHATWG 规范映射为字节本身）。
   /// €、各种弯引号、破折号、省略号等英文高频标点都在这一段，按

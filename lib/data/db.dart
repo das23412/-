@@ -20,7 +20,7 @@ class AppDb {
     final dir = await getDatabasesPath();
     final db = await openDatabase(
       p.join(dir, 'moyue.db'),
-      version: 3,
+      version: 4,
       // SQLite 默认不启用外键约束，必须显式打开，
       // 否则删书后书签/章节缓存会永久残留
       onConfigure: (db) async {
@@ -56,7 +56,8 @@ class AppDb {
             cover_url TEXT NOT NULL DEFAULT '',
             is_online INTEGER NOT NULL DEFAULT 0,
             source_id TEXT NOT NULL DEFAULT '',
-            book_url TEXT NOT NULL DEFAULT ''
+            book_url TEXT NOT NULL DEFAULT '',
+            encoding TEXT NOT NULL DEFAULT ''
           )
         ''');
         await db.execute('''
@@ -111,6 +112,11 @@ class AppDb {
             await db.execute(
                 "ALTER TABLE content_cache ADD COLUMN url TEXT NOT NULL DEFAULT ''");
           }
+        }
+        if (oldVersion < 4) {
+          // v4：手动编码选择（''=自动，仅本地 TXT 生效）
+          await db.execute(
+              "ALTER TABLE books ADD COLUMN encoding TEXT NOT NULL DEFAULT ''");
         }
       },
     );

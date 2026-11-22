@@ -39,11 +39,12 @@ class BookParser {
   /// 解析本地文件。
   ///
   /// 抛出 [MobiUnsupportedException] 等带友好信息的异常，上层应捕获并提示。
-  static Future<ParsedBook> parseFile(String path, BookFormat format) async {
+  static Future<ParsedBook> parseFile(String path, BookFormat format,
+      {String? encodingOverride}) async {
     final file = File(path);
     switch (format) {
       case BookFormat.txt:
-        return TxtParser.parse(file);
+        return TxtParser.parse(file, encodingOverride: encodingOverride);
       case BookFormat.epub:
         return EpubParser.parse(file);
       case BookFormat.mobi:

@@ -91,7 +91,7 @@ void main() {
   test('纯 ASCII 不误判为 UTF-16', () {
     // ASCII 字节对按 UTF-16 重排后部分落在 CJK 区，但可读占比
     // 低于 0.85 阈值，两个方向都应拒绝，最终走 UTF-8
-    const text = 'Hello World 123 ' * 8;
+    final text = 'Hello World 123 ' * 8;
     expect(text.codeUnits.length, greaterThanOrEqualTo(64));
     expect(CharsetDecoder.decode(utf8.encode(text)), text);
   });
@@ -112,5 +112,43 @@ void main() {
     final bytes = [0xB2, 0xE2, 0xCA, 0xD4, 0xFF, 0xB5, 0xDA, 0xD2, 0xBB];
     final decoded = CharsetDecoder.decode(bytes);
     expect(decoded, contains('测'));
+  });
+
+  group('decodeAs 手动编码', () {
+    test('utf-8', () {
+      expect(CharsetDecoder.decodeAs('utf-8', utf8.encode('测试 ABC')), '测试 ABC');
+    });
+
+    test('gbk 手动指定不再走自动识别', () {
+      // GBK: 测=B2E2 试=CAD4
+      expect(CharsetDecoder.decodeAs('gbk', [0xB2, 0xE2, 0xCA, 0xD4]), '测试');
+    });
+
+    test('gb18030 别名等同 gbk（大小写不敏感）', () {
+      expect(CharsetDecoder.decodeAs('GB18030', [0xB2, 0xE2, 0xCA, 0xD4]), '测试');
+    });
+
+    test('utf-16le / utf-16be 无 BOM 强制解码', () {
+      const text = '测试A';
+      final le = <int>[];
+      for (final cu in text.codeUnits) {
+        le
+          ..add(cu & 0xFF)
+          ..add((cu >> 8) & 0xFF);
+      }
+      expect(CharsetDecoder.decodeAs('utf-16le', le), text);
+      final be = <int>[];
+      for (final cu in text.codeUnits) {
+        be
+          ..add((cu >> 8) & 0xFF)
+          ..add(cu & 0xFF);
+      }
+      expect(CharsetDecoder.decodeAs('utf-16be', be), text);
+    });
+
+    test('空名与未知名字回落自动识别', () {
+      expect(CharsetDecoder.decodeAs('', [0xB2, 0xE2, 0xCA, 0xD4]), '测试');
+      expect(CharsetDecoder.decodeAs('big5', utf8.encode('测试')), '测试');
+    });
   });
 }

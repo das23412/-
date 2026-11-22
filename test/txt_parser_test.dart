@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyue/core/text_utils.dart';
 import 'package:moyue/parser/parser.dart';
@@ -83,6 +85,18 @@ void main() {
     for (final c in chapters) {
       expect(c.title.contains('…………'), isFalse);
     }
+  });
+
+  test('手动编码覆盖：GBK 文件按 gbk 解码正常、按 utf-8 强制出替换符', () {
+    final dir = Directory.systemTemp.createTempSync('moyue_enc_test_');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final f = File('${dir.path}/测试.txt');
+    // GBK: 测=B2E2 试=CAD4
+    f.writeAsBytesSync([0xB2, 0xE2, 0xCA, 0xD4]);
+    final gbkParsed = TxtParser.parse(f, encodingOverride: 'gbk');
+    expect(gbkParsed.chapters.first.text, '测试');
+    final utf8Parsed = TxtParser.parse(f, encodingOverride: 'utf-8');
+    expect(utf8Parsed.chapters.first.text.contains('\uFFFD'), isTrue);
   });
 
   test('常规切分', () {
