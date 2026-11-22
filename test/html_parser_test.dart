@@ -36,6 +36,7 @@ void main() {
   });
 
   test('GBK 声明 + 散点替换符：按声明重解并采纳（结果校验回归）', () {
+    // 样本头部纯 ASCII，避免混入其它编码字节干扰重解结果校验；
     // 正文 GBK 字节混入大量 ASCII（压低替换率，避免 CharsetDecoder 整本
     // 回退 GBK，从而精确走到 FFFD 重解分支）；'测试好书' 的 GBK 字节
     // 在 lenient UTF-8 下产生 ≥2 个替换符，重解后归零 → 采纳
@@ -44,7 +45,7 @@ void main() {
     ];
     final pad = 'x' * 1000;
     final head = '<html><head><meta charset="gbk"><title>t</title></head>'
-        '<body><h1>第一章 开局</h1>';
+        '<body><h1>Chapter 1</h1>';
     final headBytes = utf8.encode(head);
     final padBytes = utf8.encode(pad);
     final file2 = File(

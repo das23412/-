@@ -1,8 +1,8 @@
-name: moyue
-description: "墨阅 — 本地优先的中文小说阅读器（TXT/EPUB/MOBI/AZW3/FB2/HTML），可选书源在线搜索与下载"
+﻿name: moyue
+description: "澧ㄩ槄 鈥?鏈湴浼樺厛鐨勪腑鏂囧皬璇撮槄璇诲櫒锛圱XT/EPUB/MOBI/AZW3/FB2/HTML锛夛紝鍙€変功婧愬湪绾挎悳绱笌涓嬭浇"
 publish_to: 'none'
 
-version: 1.8.3+19
+version: 1.8.4+20
 
 environment:
   sdk: ^3.13.1
@@ -15,29 +15,29 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-  # 状态管理
+  # 鐘舵€佺鐞?
   provider: ^6.1.2
-  # 本地数据库（书架 / 进度 / 书签）
+  # 鏈湴鏁版嵁搴擄紙涔︽灦 / 杩涘害 / 涔︾锛?
   sqflite: ^2.4.1
   path_provider: ^2.1.5
   path: ^1.9.1
-  # 设置存储
+  # 璁剧疆瀛樺偍
   shared_preferences: ^2.3.4
-  # 文件/文件夹选择（走系统 SAF，不需要存储权限）
-  # 注意：11.x 的安卓实现有编译问题（FilePickerPlugin 找不到符号），锁定稳定版 10.x
+  # 鏂囦欢/鏂囦欢澶归€夋嫨锛堣蛋绯荤粺 SAF锛屼笉闇€瑕佸瓨鍌ㄦ潈闄愶級
+  # 娉ㄦ剰锛?1.x 鐨勫畨鍗撳疄鐜版湁缂栬瘧闂锛團ilePickerPlugin 鎵句笉鍒扮鍙凤級锛岄攣瀹氱ǔ瀹氱増 10.x
   file_picker: ^10.0.0
-  # EPUB 解压与 XML 解析
+  # EPUB 瑙ｅ帇涓?XML 瑙ｆ瀽
   archive: ^3.6.1
   xml: ^6.5.0
-  # GBK 编码支持（中文 TXT 常见）
+  # GBK 缂栫爜鏀寔锛堜腑鏂?TXT 甯歌锛?
   fast_gbk: ^1.0.0
-  # 书源规则的 HTML 解析与 CSS 选择器
+  # 涔︽簮瑙勫垯鐨?HTML 瑙ｆ瀽涓?CSS 閫夋嫨鍣?
   html: ^0.15.6
-  # 应用内更新 APK 的 sha256 校验
+  # 搴旂敤鍐呮洿鏂?APK 鐨?sha256 鏍￠獙
   crypto: ^3.0.0
-  # “所有文件访问”权限引导
+  # 鈥滄墍鏈夋枃浠惰闂€濇潈闄愬紩瀵?
   permission_handler: ">=11.3.1 <13.0.0"
-  # 仿真翻页效果：源码已内置在 lib/reader/turn_page/（基于 turn_page_transition，MIT）
+  # 浠跨湡缈婚〉鏁堟灉锛氭簮鐮佸凡鍐呯疆鍦?lib/reader/turn_page/锛堝熀浜?turn_page_transition锛孧IT锛?
 
 dev_dependencies:
   flutter_test:
