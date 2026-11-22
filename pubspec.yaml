@@ -36,7 +36,7 @@ dependencies:
   # 应用内更新 APK 的 sha256 校验
   crypto: ^3.0.0
   # “所有文件访问”权限引导
-  permission_handler: ">=11.3.1 <13.0.0"
+  permission_handler: ^13.0.2
   # 仿真翻页效果：源码已内置在 lib/reader/turn_page/（基于 turn_page_transition，MIT）
 
 dev_dependencies:
