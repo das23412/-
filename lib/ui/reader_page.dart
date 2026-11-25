@@ -69,13 +69,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     ..addListener(_onCoverTick)
     ..addStatusListener(_onCoverStatus);
 
-  // 左侧目录/书签面板（占屏 1/3 宽，滑入滑出）
-  bool _sidePanelOpen = false;
-  late final AnimationController _panelCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 240));
-  ScrollController? _tocListController;
-  ScrollController? _bookmarkListController;
-
   // 搜索弹层输入框：字段复用（每次打开先清空），dispose 时释放
   final TextEditingController _searchSheetCtrl = TextEditingController();
 
@@ -116,9 +109,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     _pageController?.dispose();
     _scrollController?.dispose();
     _coverCtrl.dispose();
-    _panelCtrl.dispose();
-    _tocListController?.dispose();
-    _bookmarkListController?.dispose();
     _searchSheetCtrl.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
@@ -344,15 +334,10 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final palette = _effectivePalette(cfg, isDark);
 
-    return PopScope(
-      canPop: !_sidePanelOpen,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _sidePanelOpen) _closeSidePanel();
-      },
-      // 阅读页整体（含菜单/面板）关掉系统字体缩放：分页按 cfg.fontSize 固定
-      // 假设排版，系统缩放会让渲染字号偏离排版结果，出现溢出/错页。
-      child: MediaQuery.withNoTextScaling(
-        child: Scaffold(
+    // 阅读页整体（含菜单）关掉系统字体缩放：分页按 cfg.fontSize 固定
+    // 假设排版，系统缩放会让渲染字号偏离排版结果，出现溢出/错页。
+    return MediaQuery.withNoTextScaling(
+      child: Scaffold(
       body: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         color: palette.background,
@@ -381,8 +366,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
         ),
       ),        // AnimatedContainer
       ),        // Scaffold
-      ),        // MediaQuery.withNoTextScaling
-    );          // PopScope 闭 + return 分号
+    );          // MediaQuery.withNoTextScaling + return
   }
 
   ReaderPalette _effectivePalette(ReaderConfig cfg, bool isDark) {
@@ -572,7 +556,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
           Positioned.fill(child: _background(cfg, isDark: false)),
           Positioned.fill(child: body),
           // 下拉书签热区与指示（仅翻页模式、菜单与面板关闭时）
-          if (cfg.settings.pageMode != 3 && !_menuVisible && !_sidePanelOpen)
+          if (cfg.settings.pageMode != 3 && !_menuVisible)
             Positioned(
               top: 0,
               left: 0,
@@ -595,34 +579,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                 },
               ),
             ),
-          // 左侧目录/书签面板：遮罩 + 滑入面板
-          if (_sidePanelOpen || _panelCtrl.value > 0) ...[
-            AnimatedBuilder(
-              animation: _panelCtrl,
-              builder: (ctx, _) => Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: !_sidePanelOpen,
-                  child: GestureDetector(
-                    onTap: _closeSidePanel,
-                    child: Container(
-                      color: Colors.black
-                          .withValues(alpha: 0.3 * _panelCtrl.value),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            AnimatedBuilder(
-              animation: _panelCtrl,
-              builder: (ctx, _) => Positioned(
-                top: 0,
-                bottom: 0,
-                left: 0,
-                width: MediaQuery.of(ctx).size.width / 3,
-                child: _sidePanel(),
-              ),
-            ),
-          ],
           if (_bookmarkDragPx != null)
             Positioned(
               top: MediaQuery.of(ctx).padding.top + 10,
@@ -1259,10 +1215,12 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                       _barButton(
                         icon: Icons.menu_book_outlined,
                         label: '目录',
-                        onTap: () {
-                          if (_menuVisible) _toggleMenu();
-                          _openSidePanel();
-                        },
+                        onTap: _showTocSheet,
+                      ),
+                      _barButton(
+                        icon: Icons.bookmarks_outlined,
+                        label: '书签列表',
+                        onTap: _showBookmarkSheet,
                       ),
                       _barButton(
                         icon: Icons.skip_next,
@@ -1447,100 +1405,104 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
 
   // ---------- 左侧目录/书签面板 ----------
 
-  void _openSidePanel() {
-    _sidePanelOpen = true;
-    _panelCtrl.forward();
-    setState(() {});
-  }
-
-  void _closeSidePanel() {
-    _sidePanelOpen = false;
-    _panelCtrl.reverse();
-    setState(() {});
-  }
-
-  /// 左侧 1/3 宽面板：顶部"目录/书签"切换，默认章节列表。
-  Widget _sidePanel() {
-    final tocCtrl = _tocListController ??= ScrollController();
-    final bmCtrl = _bookmarkListController ??= ScrollController();
-    // 书签按章节分组（章号升序，组内按位置升序）
-    final groups = <int, List<Bookmark>>{};
-    for (final bm in rs.bookmarks) {
-      groups.putIfAbsent(bm.chapterIndex, () => []).add(bm);
-    }
-    final sortedKeys = groups.keys.toList()..sort();
-
-    return SlideTransition(
-      position: _panelCtrl.drive(
-        Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)
-            .chain(CurveTween(curve: Curves.easeOutCubic)),
-      ),
-      child: Material(
-        elevation: 8,
-        color: Theme.of(context).scaffoldBackgroundColor,
-        child: DefaultTabController(
-          length: 2,
-          child: Column(
+  /// 目录：底部全宽弹层（与旧版交互一致），章名完整显示不省略。
+  void _showTocSheet() {
+    _toggleMenu();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        expand: false,
+        builder: (ctx, sheetCtrl) {
+          // 打开时定位到当前章（无固定行高，按估高跳转，可手动微调）
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (sheetCtrl.hasClients && rs.currentChapter > 0) {
+              sheetCtrl.jumpTo((rs.currentChapter * 52.0)
+                  .clamp(0.0, sheetCtrl.position.maxScrollExtent));
+            }
+          });
+          return Column(
             children: [
-              TabBar(
-                tabs: const [Tab(text: '目录'), Tab(text: '书签')],
-                onTap: (_) => setState(() {}),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('目录 · 共${rs.chapters.length}章',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
               ),
               Expanded(
-                child: TabBarView(
-                  children: [
-                    // 目录视图
-                    Builder(
-                      builder: (ctx) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (tocCtrl.hasClients && rs.currentChapter > 0) {
-                            tocCtrl.jumpTo((rs.currentChapter * 48.0)
-                                .clamp(0.0, tocCtrl.position.maxScrollExtent));
-                          }
-                        });
-                        return ListView.builder(
-                          controller: tocCtrl,
-                          itemCount: rs.chapters.length,
-                          itemExtent: 48,
-                          itemBuilder: (ctx, i) {
-                            final current = i == rs.currentChapter;
-                            return ListTile(
-                              dense: true,
-                              selected: current,
-                              title: Text(
-                                rs.chapters[i].title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: current
-                                    ? TextStyle(
-                                        color: Theme.of(ctx).colorScheme.primary,
-                                        fontWeight: FontWeight.bold)
-                                    : null,
-                              ),
-                              onTap: () {
-                                _closeSidePanel();
-                                _goChapter(i);
-                              },
-                            );
-                          },
-                        );
+                child: ListView.builder(
+                  controller: sheetCtrl,
+                  itemCount: rs.chapters.length,
+                  itemBuilder: (ctx, i) {
+                    final current = i == rs.currentChapter;
+                    return ListTile(
+                      dense: true,
+                      selected: current,
+                      title: Text(
+                        '${i + 1}. ${rs.chapters[i].title}',
+                        style: current
+                            ? TextStyle(
+                                color: Theme.of(ctx).colorScheme.primary,
+                                fontWeight: FontWeight.bold)
+                            : null,
+                      ),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _goChapter(i);
                       },
-                    ),
-                    // 书签视图：按章节分组
-                    ListenableBuilder(
-                      listenable: rs,
-                      builder: (ctx, _) {
-                        if (rs.bookmarks.isEmpty) {
-                          return Center(
-                            child: Text(
-                              '还没有书签，下拉或点菜单「加书签」保存位置',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Theme.of(ctx).hintColor),
-                            ),
-                          );
-                        }
-                        return ListView(
-                          controller: bmCtrl,
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 书签列表：底部全宽弹层，按章节分组；点击跳转、右侧按钮删除。
+  void _showBookmarkSheet() {
+    _toggleMenu();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.55,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, sheetCtrl) => ListenableBuilder(
+          listenable: rs,
+          builder: (ctx, _) {
+            // 书签按章节分组（章号升序，组内按库序）
+            final groups = <int, List<Bookmark>>{};
+            for (final bm in rs.bookmarks) {
+              groups.putIfAbsent(bm.chapterIndex, () => []).add(bm);
+            }
+            final sortedKeys = groups.keys.toList()..sort();
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text('书签 · 共${rs.bookmarks.length}条',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                Expanded(
+                  child: rs.bookmarks.isEmpty
+                      ? Center(
+                          child: Text(
+                            '还没有书签，阅读时点菜单「加书签」保存位置',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Theme.of(ctx).hintColor),
+                          ),
+                        )
+                      : ListView(
+                          controller: sheetCtrl,
                           children: [
                             for (final key in sortedKeys) ...[
                               Padding(
@@ -1548,8 +1510,6 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                                     const EdgeInsets.fromLTRB(14, 12, 14, 4),
                                 child: Text(
                                   '第${key + 1}章 ${key < rs.chapters.length ? rs.chapters[key].title : ''}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 13),
@@ -1571,7 +1531,7 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                                     style: const TextStyle(fontSize: 13),
                                   ),
                                   onTap: () {
-                                    _closeSidePanel();
+                                    Navigator.pop(ctx);
                                     _goChapter(bm.chapterIndex,
                                         charOffset: bm.charOffset);
                                   },
@@ -1587,14 +1547,11 @@ class _ReaderPageState extends State<ReaderPage> with TickerProviderStateMixin {
                                 ),
                             ],
                           ],
-                        );
-                      },
-                    ),
-                  ],
+                        ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            );
+          },
         ),
       ),
     );

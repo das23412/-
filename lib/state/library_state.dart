@@ -435,16 +435,19 @@ class LibraryState extends ChangeNotifier {
 
   void setSearch(String q) {
     searchQuery = q;
+    _visibleDirty = true; // 搜索词变化必须置脏，否则可见列表缓存不刷新
     notifyListeners();
   }
 
   void setSortMode(SortMode m) {
     sortMode = m;
+    _visibleDirty = true; // 排序变化必须置脏
     notifyListeners();
   }
 
   void setActiveTag(String? tag) {
     activeTag = tag;
+    _visibleDirty = true; // 标签筛选变化必须置脏
     notifyListeners();
   }
 }
