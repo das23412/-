@@ -37,7 +37,7 @@ String formatTimeCN(int ms) {
 String formatDateTimeCN(int ms) {
   if (ms <= 0) return '—';
   final d = DateTime.fromMillisecondsSinceEpoch(ms);
-  final two = (int v) => v.toString().padLeft(2, '0');
+  String two(int v) => v.toString().padLeft(2, '0');
   return '${d.year}/${d.month}/${d.day} ${two(d.hour)}:${two(d.minute)}';
 }
 
