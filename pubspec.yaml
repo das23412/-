@@ -2,7 +2,7 @@
 description: "澧ㄩ槄 鈥?鏈湴浼樺厛鐨勪腑鏂囧皬璇撮槄璇诲櫒锛圱XT/EPUB/MOBI/AZW3/FB2/HTML锛夛紝鍙€変功婧愬湪绾挎悳绱笌涓嬭浇"
 publish_to: 'none'
 
-version: 1.8.4+20
+version: 1.8.5+21
 
 environment:
   sdk: ^3.13.1
