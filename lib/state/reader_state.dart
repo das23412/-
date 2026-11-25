@@ -46,6 +46,13 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
   double? _layoutWidth;
   double? _layoutHeight;
 
+  /// 上次排版调用的样式参数（layoutFor 记录）：下次打开书时
+  /// 隔离线程预排版窗口复用同一套参数，保证与 build 期排版完全一致。
+  double? _lastStyleFontSize;
+  double? _lastStyleHeight;
+  String? _lastStyleFontFamily;
+  bool? _lastStyleIndent;
+
   bool get isOnlineBook => book.isOnline;
 
   /// 在途章节加载任务（按章去重：同一章并发请求复用同一个 Future）。
@@ -164,6 +171,9 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     currentPage = 0;
     await _refreshMeta();
     bookmarks = await _db.bookmarksOf(book.id!);
+    // 加载期（UI 仍显示 loading）在隔离线程预排版当前窗口，
+    // 消除打开大书后 build 期同步排版造成的约 1 秒顿挫
+    await _precomputeWindowLayouts();
     loading = false;
     _safeNotify();
   }
@@ -301,6 +311,48 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     _layouts.removeWhere((k, _) => (k - center).abs() > keep);
   }
 
+  /// 在隔离线程预排版打开窗口（当前章 ±1）。
+  /// 依赖上次会话记录的视口/样式参数（layoutFor 调用时记录）；
+  /// 首次安装后无记录、或隔离排版失败时静默跳过——build 期
+  /// layoutFor 的同步排版兜底，正确性不受影响。
+  Future<void> _precomputeWindowLayouts() async {
+    final fs = _lastStyleFontSize;
+    final lh = _lastStyleHeight;
+    final ff = _lastStyleFontFamily;
+    final ind = _lastStyleIndent;
+    final w = _layoutWidth;
+    final h = _layoutHeight;
+    if (fs == null || lh == null || ind == null || w == null || h == null) {
+      return;
+    }
+    try {
+      final jobs = <Map<String, Object?>>[
+        for (final idx in [
+          currentChapter - 1,
+          currentChapter,
+          currentChapter + 1,
+        ])
+          if (idx >= 0 && idx < chapters.length && !_layouts.containsKey(idx))
+            {'idx': idx, 'text': chapters[idx].text},
+      ];
+      if (jobs.isEmpty) return;
+      final results = await compute(_precomputeLayoutJob, {
+        'jobs': jobs,
+        'fontSize': fs,
+        'lineHeight': lh,
+        'fontFamily': ff,
+        'indent': ind,
+        'viewportWidth': w,
+        'viewportHeight': h,
+      });
+      for (final entry in results) {
+        _layouts[entry.key] = entry.value;
+      }
+    } catch (_) {
+      // 隔离排版失败不影响打开：build 期 layoutFor 同步排版兜底
+    }
+  }
+
   void _recomputeOffsets() {
     int acc = 0;
     chapterStartChars = List<int>.filled(chapters.length, 0);
@@ -342,6 +394,11 @@ class ReaderState extends ChangeNotifier with WidgetsBindingObserver {
     double height,
     bool indent,
   ) {
+    // 记录样式参数：下次打开书时隔离线程预排版窗口复用同一套参数
+    _lastStyleFontSize = style.fontSize;
+    _lastStyleHeight = style.height;
+    _lastStyleFontFamily = style.fontFamily;
+    _lastStyleIndent = indent;
     // 视口尺寸变化（旋转/分屏/窗口调整）时，旧尺寸排出的版式全部失效，
     // 否则会拿到与当前屏幕不符的分页（文字溢出或留大片空白）。
     if (_layoutWidth != width || _layoutHeight != height) {
@@ -588,4 +645,34 @@ List<(int, int)> _searchBatchJob(Map<String, Object?> job) {
     }
   }
   return found;
+}
+
+/// 打开窗口预排版（隔离线程执行）：按主 isolate 传入的样式与视口参数排版，
+/// 返回可直接写入 _layouts 的布局。样式只取影响分页的三个量
+/// （字号/行高/字体），颜色等渲染属性不参与排版。
+List<MapEntry<int, ChapterLayout>> _precomputeLayoutJob(
+    Map<String, Object?> args) {
+  final style = TextStyle(
+    fontSize: args['fontSize']! as double,
+    height: args['lineHeight']! as double,
+    fontFamily: args['fontFamily'] as String?,
+  );
+  final width = args['viewportWidth']! as double;
+  final height = args['viewportHeight']! as double;
+  final indent = args['indent']! as bool;
+  final out = <MapEntry<int, ChapterLayout>>[];
+  for (final job in (args['jobs']! as List).cast<Map<dynamic, dynamic>>()) {
+    final idx = (job['idx']! as num).toInt();
+    final text = job['text']! as String;
+    out.add(MapEntry(
+        idx,
+        Paginator.layout(
+          chapterText: text,
+          style: style,
+          viewportWidth: width,
+          viewportHeight: height,
+          indent: indent,
+        )));
+  }
+  return out;
 }
