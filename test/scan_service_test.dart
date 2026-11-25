@@ -50,10 +50,13 @@ void main() {
 
       final report = ScanService.scan([root.path]);
       final paths = report.found.map((f) => f.path).toSet();
-      expect(paths, contains('${books.path}/书A.txt'));
-      expect(paths, contains('${books.path}/android/书B.txt'),
+      // 用 endsWith 匹配，避免 Windows/macOS 路径分隔符差异
+      expect(paths.any((p) => p.endsWith('书A.txt')), isTrue,
+          reason: 'books 子目录应被扫描到');
+      expect(paths.any((p) => p.contains('android') && p.endsWith('书B.txt')),
+          isTrue,
           reason: '用户自建 android 目录不应整树漏扫');
-      expect(paths, contains('${root.path}/书C.epub'));
+      expect(paths.any((p) => p.endsWith('书C.epub')), isTrue);
       expect(paths.any((p) => p.endsWith('small.txt')), isFalse);
       expect(report.dirsWalked, greaterThan(0));
     });
